@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+app_dir="$project_dir/build/mpx.app"
+case "${1-}" in
+    --help|-h)
+        printf 'Usage: mpx [local-video-file ...]\nOpens a native mpx window and returns immediately.\n'
+        exit 0 ;;
+esac
+if [ ! -d "$app_dir" ]; then
+    echo 'Build mpx first with scripts/build.sh.' >&2
+    exit 1
+fi
+if [ "$#" -eq 0 ]; then
+    exec /usr/bin/open -a "$app_dir" 'mpx://new-window'
+fi
+for video_file in "$@"; do
+    if [ ! -f "$video_file" ]; then
+        printf 'Not a local file: %s\n' "$video_file" >&2
+        exit 1
+    fi
+done
+exec /usr/bin/open -a "$app_dir" -- "$@"

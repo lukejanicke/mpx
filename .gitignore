@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+build/
+.DS_Store
+*.log
+__pycache__/
+*.pyc
+# Local design-conversation notes are not part of the published source.
+DESIGN.md

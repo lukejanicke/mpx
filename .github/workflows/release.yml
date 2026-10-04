@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      MPX_TEST_VIDEO_PATH: ${{ github.workspace }}/build/fixtures/h264.mp4
+      MPX_TEST_FIXTURE_DIRECTORY: ${{ github.workspace }}/build/fixtures
+      MPX_TEST_SCRATCH_PATH: ${{ runner.temp }}/mpx-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check platform and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" -ge 27
+          xcodebuild -version
+          version=$(python3 -c 'import plistlib; print(plistlib.load(open("Resources/Info.plist", "rb"))["CFBundleShortVersionString"])')
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$version"
+          fi
+          python3 scripts/release-notes.py "$tag" build/release/RELEASE_NOTES.md
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: brew install mpv pkgconf
+
+      - name: Run tests
+        run: |
+          scripts/make-fixtures.sh
+          scripts/test.sh
+
+      - name: Package app and corresponding dependency sources
+        run: scripts/package.sh
+
+      - name: Verify the packaged app without Homebrew access
+        run: |
+          python3 scripts/verify-package.py "build/release/mpx-${RELEASE_VERSION}-macos-arm64.zip" "$MPX_TEST_SCRATCH_PATH"
+          cd build/release
+          shasum -a 256 -c SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mpx-${{ env.RELEASE_VERSION }}-release
+          path: build/release/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Publish approved version tag
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(
+            "build/release/mpx-${RELEASE_VERSION}-macos-arm64.zip"
+            "build/release/mpx-${RELEASE_VERSION}-dependency-sources.tar.gz"
+            build/release/dependency-sources.json
+            build/release/THIRD-PARTY.md
+            build/release/SHA256SUMS.txt
+          )
+          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > "$RUNNER_TEMP/mpx-is-draft"; then
+            if [[ "$(cat "$RUNNER_TEMP/mpx-is-draft")" != true ]]; then
+              echo 'A published version cannot be replaced. Create a new version.' >&2
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --draft --verify-tag \
+              --title "mpx ${RELEASE_VERSION}" --notes-file build/release/RELEASE_NOTES.md
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest \
+            --notes-file build/release/RELEASE_NOTES.md
