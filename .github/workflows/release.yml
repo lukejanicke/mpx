@@ -19,6 +19,9 @@ jobs:
     permissions:
       contents: write
     env:
+      # Hosted macOS VMs may not provide accelerated OpenGL. These tests remain
+      # mandatory locally before the maintainer approves a version tag.
+      MPX_ALLOW_NO_OPENGL_TESTS: '1'
       MPX_TEST_VIDEO_PATH: ${{ github.workspace }}/build/fixtures/h264.mp4
       MPX_TEST_FIXTURE_DIRECTORY: ${{ github.workspace }}/build/fixtures
     steps:

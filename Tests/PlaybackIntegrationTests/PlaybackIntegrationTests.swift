@@ -4,6 +4,18 @@ import AppKit
 @testable import MPX
 
 final class PlaybackIntegrationTests: XCTestCase {
+    private func makePlayer(history: HistoryStore = .shared) throws -> PlayerWindowController {
+        do { return try PlayerWindowController(history: history) }
+        catch let error as MPXError {
+            if case .playback(let message) = error,
+               message == "Could not create the video display.",
+               ProcessInfo.processInfo.environment["MPX_ALLOW_NO_OPENGL_TESTS"] == "1" {
+                throw XCTSkip("This runner cannot create accelerated OpenGL. Run the full display suite on a supported physical Mac before approving a release.")
+            }
+            throw error
+        }
+    }
+
     func testRealPlaybackResumeAndPreciseSeek() throws {
         guard let path = ProcessInfo.processInfo.environment["MPX_TEST_VIDEO_PATH"] else {
             throw XCTSkip("Set MPX_TEST_VIDEO_PATH to a local video for the playback integration test.")
@@ -73,7 +85,7 @@ final class PlaybackIntegrationTests: XCTestCase {
         guard let path = ProcessInfo.processInfo.environment["MPX_TEST_VIDEO_PATH"] else { throw XCTSkip("Set MPX_TEST_VIDEO_PATH.") }
         _ = NSApplication.shared
         let historyURL = FileManager.default.temporaryDirectory.appendingPathComponent("mpx-resize-test-\(UUID().uuidString).json")
-        let player = try PlayerWindowController(history: HistoryStore(file: historyURL))
+        let player = try makePlayer(history: HistoryStore(file: historyURL))
         defer { player.shutdown(); try? FileManager.default.removeItem(at: historyURL) }
         let ready = expectation(description: "Paused video ready for resize")
         let original = player.engine.onEvent
@@ -126,7 +138,7 @@ final class PlaybackIntegrationTests: XCTestCase {
     func testEmptyWindowDefaultSizeAndCenter() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)
-        let player = try PlayerWindowController()
+        let player = try makePlayer()
         defer { player.shutdown() }
         let window = try XCTUnwrap(player.window)
         XCTAssertEqual(player.surface.bounds.width, screen.frame.width / 2, accuracy: 0.5)
@@ -148,7 +160,7 @@ final class PlaybackIntegrationTests: XCTestCase {
     func testWindowRefitsForPortraitAndUltrawideReplacement() throws {
         guard let directory = ProcessInfo.processInfo.environment["MPX_TEST_FIXTURE_DIRECTORY"] else { throw XCTSkip("Set MPX_TEST_FIXTURE_DIRECTORY.") }
         _ = NSApplication.shared
-        let player = try PlayerWindowController()
+        let player = try makePlayer()
         defer { player.shutdown() }
         let window = try XCTUnwrap(player.window)
         let original = player.engine.onEvent
@@ -180,7 +192,7 @@ final class PlaybackIntegrationTests: XCTestCase {
         guard let path = ProcessInfo.processInfo.environment["MPX_TEST_VIDEO_PATH"] else { throw XCTSkip("Set MPX_TEST_VIDEO_PATH.") }
         _ = NSApplication.shared
         let historyURL = FileManager.default.temporaryDirectory.appendingPathComponent("mpx-scrub-test-\(UUID().uuidString).json")
-        let player = try PlayerWindowController(history: HistoryStore(file: historyURL))
+        let player = try makePlayer(history: HistoryStore(file: historyURL))
         defer { player.shutdown(); try? FileManager.default.removeItem(at: historyURL) }
         let ready = expectation(description: "Original playback state is ready")
         let preview = expectation(description: "Paused preview during drag")
@@ -319,7 +331,7 @@ final class PlaybackIntegrationTests: XCTestCase {
         guard let path = ProcessInfo.processInfo.environment["MPX_TEST_VIDEO_PATH"] else { throw XCTSkip("Set MPX_TEST_VIDEO_PATH.") }
         _ = NSApplication.shared
         let historyURL = FileManager.default.temporaryDirectory.appendingPathComponent("mpx-history-test-\(UUID().uuidString).json")
-        let player = try PlayerWindowController(history: HistoryStore(file: historyURL))
+        let player = try makePlayer(history: HistoryStore(file: historyURL))
         defer { player.shutdown(); try? FileManager.default.removeItem(at: historyURL) }
         let started = expectation(description: "Video ready for scan")
         let restored = expectation(description: "Scan restores pause and mute")
