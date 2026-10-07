@@ -1,11 +1,26 @@
 import AppKit
 import PlayerLogic
 
+private final class CentredButtonCell: NSButtonCell {
+    override func imageRect(forBounds rect: NSRect) -> NSRect {
+        let size = super.imageRect(forBounds: rect).size
+        return NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        let size = super.titleRect(forBounds: rect).size
+        return NSRect(x: rect.minX + 8, y: rect.midY - size.height / 2,
+                      width: rect.width - 16, height: size.height)
+    }
+}
+
 final class SymbolButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
     var actionHandler: (() -> Void)?
 
     init(symbol: String, label: String, size: CGFloat = 20) {
         super.init(frame: .zero)
+        cell = CentredButtonCell()
         isBordered = false
         bezelStyle = .regularSquare
         imagePosition = .imageOnly
@@ -19,7 +34,7 @@ final class SymbolButton: NSButton {
         target = self
         action = #selector(performAction)
         translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 34), heightAnchor.constraint(equalToConstant: 36)])
+        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 44), heightAnchor.constraint(equalToConstant: 44)])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -36,6 +51,9 @@ final class SymbolButton: NSButton {
 }
 
 private final class TimeButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+    override init(frame: NSRect) { super.init(frame: frame); cell = CentredButtonCell() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
@@ -73,7 +91,7 @@ final class ControlsView: NSView {
         volume.imageScaling = .scaleProportionallyDown
         volume.toolTip = "Volume: Up / Down · Mute: M"
         volume.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([volume.widthAnchor.constraint(equalToConstant: 34), volume.heightAnchor.constraint(equalToConstant: 36)])
+        NSLayoutConstraint.activate([volume.widthAnchor.constraint(equalToConstant: 34), volume.heightAnchor.constraint(equalToConstant: 44)])
 
         time.isBordered = false
         time.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
@@ -104,23 +122,23 @@ final class ControlsView: NSView {
     /// scaling their symbols or click targets down.
     func height(for width: CGFloat) -> CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        let timeWidth = max(178, (time.title as NSString).size(withAttributes: [.font: font]).width + 8)
-        return width >= 210 + 2 * (timeWidth + 20) ? 36 : 78
+        let timeWidth = ceil((time.title as NSString).size(withAttributes: [.font: font]).width) + 16
+        return width >= 260 + 2 * (timeWidth + 20) ? 44 : 94
     }
 
     override func layout() {
         super.layout()
-        isCompact = height(for: bounds.width) > 36
-        transport.spacing = isCompact ? 8 : 10
+        isCompact = height(for: bounds.width) > 44
+        transport.spacing = isCompact ? min(8, max(0, (bounds.width - 220) / 4)) : 10
         let transportWidth = transport.fittingSize.width
         let utilityWidth = utilities.fittingSize.width
-        transport.frame = NSRect(x: bounds.midX - transportWidth / 2, y: 0, width: transportWidth, height: 36)
+        transport.frame = NSRect(x: bounds.midX - transportWidth / 2, y: 0, width: transportWidth, height: 44)
         time.font = .monospacedDigitSystemFont(ofSize: isCompact ? 11 : 13, weight: .medium)
         time.alignment = .left
-        let timeWidth = max(isCompact ? 150 : 178, time.intrinsicContentSize.width)
-        let informationY: CGFloat = isCompact ? 42 : 0
-        time.frame = NSRect(x: 0, y: informationY, width: timeWidth, height: 36)
-        utilities.frame = NSRect(x: bounds.width - utilityWidth, y: informationY, width: utilityWidth, height: 36)
+        let timeWidth = ceil((time.title as NSString).size(withAttributes: [.font: time.font!]).width) + 16
+        let informationY: CGFloat = isCompact ? 50 : 0
+        time.frame = NSRect(x: 0, y: informationY, width: timeWidth, height: 44)
+        utilities.frame = NSRect(x: bounds.width - utilityWidth, y: informationY, width: utilityWidth, height: 44)
     }
 
     func update(_ state: PlaybackSnapshot, displayedPosition: Double? = nil) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.6] - 2026-10-07
+
+- Improve control readability with a translucent black panel, rounded corners, and consistent margins and padding.
+- Centre the symbols inside uniform 44 × 44-point button targets and fit the time target to its text.
+- Centre the scrub hit area on the seek line and keep all control targets inside the panel.
+- Show the hover timestamp above the panel on its own noninteractive dark background.
+- Keep controls visible while hovering the panel padding.
+
 ## [0.1.5] - 2026-10-04
 
 First public release of mpx, a minimal native macOS video player powered by libmpv.

@@ -8,7 +8,7 @@ Use `MAJOR.MINOR.PATCH` versions and matching Git tags such as `v0.1.5`. The ini
 
 Pushing an approved `vMAJOR.MINOR.PATCH` tag triggers `.github/workflows/release.yml`. It checks tag/version agreement, builds on GitHub's Apple silicon `xcode-27` runner, runs the tests, packages the app and dependency sources, checks relocation and signatures, and repeats tests against the bundled libraries with reads from `/opt/homebrew` denied. The release is published only after those steps pass.
 
-Hosted macOS VMs may not provide accelerated OpenGL. The workflow explicitly allows seven display-dependent tests to skip only when creating that display fails; codec decoding, resume/seek, playback errors, geometry logic, overlay layout and timeline tests still run. Other playback/rendering errors remain failures. **Run the complete 20-test suite and inspect playback on a supported physical Mac before approving a release tag.** The full local suite does not enable these skips by default.
+Hosted macOS VMs may not provide accelerated OpenGL. The workflow explicitly allows eight display-dependent tests to skip only when creating that display fails; codec decoding, resume/seek, playback errors, geometry logic, overlay layout and timeline tests still run. Other playback/rendering errors remain failures. **Run the complete 21-test suite and inspect playback on a supported physical Mac before approving a release tag.** The full local suite does not enable these skips by default.
 
 Only push a version tag after the maintainer approves the release. Ordinary commits do not publish an app. The workflow can also be run manually against `main` to perform a preflight build without publishing. It uploads its packages as workflow artifacts for inspection.
 

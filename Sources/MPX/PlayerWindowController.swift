@@ -1,6 +1,21 @@
 import AppKit
 import PlayerLogic
 
+private final class ControlsBackdrop: NSView {
+    var hoverChanged: ((Bool) -> Void)?
+    private(set) var isHovered = false
+    private var tracking: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(tracking!)
+    }
+    override func mouseEntered(with event: NSEvent) { isHovered = true; hoverChanged?(true) }
+    override func mouseExited(with event: NSEvent) { isHovered = false; hoverChanged?(false) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     let engine: PlaybackEngine
     let video: VideoView
@@ -9,7 +24,9 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     private(set) var snapshot = PlaybackSnapshot()
     private(set) var tracks: [MediaTrack] = []
     private var controls: ControlsView!
+    private let controlsBackdrop = ControlsBackdrop(frame: .zero)
     let progress = ProgressView(frame: .zero)
+    var controlsPanelFrame: NSRect { controlsBackdrop.frame }
     private var scrubPosition: Double?
     private var beforeScrubPaused = true
     private var scrubLastSeek = 0.0
@@ -84,6 +101,12 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func setupControls() {
+        controlsBackdrop.wantsLayer = true
+        controlsBackdrop.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        controlsBackdrop.layer?.cornerRadius = 6
+        controlsBackdrop.setAccessibilityElement(false)
+        surface.addSubview(controlsBackdrop)
+        controlsBackdrop.hoverChanged = { [weak self] entered in if entered { self?.showControls() } else { self?.scheduleHide() } }
         controls = ControlsView(start: { [weak self] in self?.goToStart() }, back: { [weak self] in self?.skip(-10) },
                                 toggle: { [weak self] in self?.togglePlayback() }, forward: { [weak self] in self?.skip(10) },
                                 end: { [weak self] in self?.goToEnd() },
@@ -92,6 +115,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         controls.timeClicked = { [weak self] in self?.goToTime() }
         surface.addSubview(controls)
         surface.addSubview(progress)
+        surface.addSubview(progress.hoverTime)
         progress.interactionBegan = { [weak self] in self?.beginScrub() }
         progress.positionChanged = { [weak self] position in self?.scrub(to: position) }
         progress.interactionEnded = { [weak self] in self?.endScrub() }
@@ -100,6 +124,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         controls.translatesAutoresizingMaskIntoConstraints = true
         layoutControls()
         controls.isHidden = true
+        controlsBackdrop.isHidden = true
         progress.isHidden = true
     }
 
@@ -328,17 +353,19 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         let fitted = zoomState.fitted
         let videoWidth = fileURL == nil ? surface.bounds.width : fitted.width
         let videoHeight = fileURL == nil ? surface.bounds.height : fitted.height
-        let width = videoWidth * 0.9
+        // Match the panel's side and bottom margins; ease them in tiny windows.
+        let margin = min(16, max(4, (videoWidth - 272) / 2))
+        let width = max(1, videoWidth - 2 * margin - 32)
         let size = NSSize(width: width, height: controls.height(for: width))
-        let inset = min(16, videoHeight * 0.05)
+        let inset = margin + 16
         controls.frame = NSRect(x: surface.bounds.midX - size.width / 2,
                                y: (surface.bounds.height - videoHeight) / 2 + inset,
                                width: size.width, height: size.height)
         controls.layoutSubtreeIfNeeded()
-        // Seven extra hit-area points keep the thumb whole at either end;
-        // the visible rounded stroke is exactly 90% of the video width.
-        progress.frame = NSRect(x: surface.bounds.midX - (videoWidth * 0.9 + 7) / 2, y: controls.frame.maxY + 4,
-                                width: videoWidth * 0.9 + 7, height: 44)
+        progress.frame = NSRect(x: controls.frame.minX, y: controls.frame.maxY + 8,
+                                width: width, height: 24)
+        controlsBackdrop.frame = controls.frame.union(progress.frame).insetBy(dx: -16, dy: -16)
+
     }
 
     private func applyTransform() {
@@ -353,30 +380,38 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         controls.isHidden = false
         controls.layer?.removeAllAnimations()
         controls.alphaValue = 1
+        controlsBackdrop.isHidden = false
+        controlsBackdrop.layer?.removeAllAnimations()
+        controlsBackdrop.alphaValue = 1
         progress.isHidden = false
         progress.layer?.removeAllAnimations()
         progress.alphaValue = 1
+        progress.hoverTime.layer?.removeAllAnimations()
+        progress.hoverTime.alphaValue = 1
         scheduleHide()
     }
     private func scheduleHide() {
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.controls.isHovered, !self.progress.isHovered, !self.progress.isDragging, self.gesture == nil else { return }
+            guard let self, !self.controlsBackdrop.isHovered, !self.controls.isHovered, !self.progress.isHovered, !self.progress.isDragging, self.gesture == nil else { return }
             if let focus = self.window?.firstResponder as? NSView, focus.isDescendant(of: self.controls) { return }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
                 self.controls.animator().alphaValue = 0
+                self.controlsBackdrop.animator().alphaValue = 0
                 self.progress.animator().alphaValue = 0
+                self.progress.hoverTime.animator().alphaValue = 0
             } completionHandler: { [weak self] in
                 guard let self, self.controls.alphaValue == 0 else { return }
                 self.controls.isHidden = true
+                self.controlsBackdrop.isHidden = true
                 self.progress.isHidden = true
             }
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
-    func pointerLeft() { if !controls.isHovered, !progress.isHovered { scheduleHide() } }
+    func pointerLeft() { if !controlsBackdrop.isHovered, !controls.isHovered, !progress.isHovered { scheduleHide() } }
     private func showFeedback(_ text: String, persistent: Bool = false) {
         feedbackWork?.cancel()
         feedback.stringValue = text

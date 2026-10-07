@@ -1,6 +1,10 @@
 import AppKit
 import PlayerLogic
 
+private final class HoverTimestamp: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// A thin seek line with a generous hit area, independent of the controls row.
 final class ProgressView: NSControl {
     var interactionBegan: (() -> Void)?
@@ -14,7 +18,7 @@ final class ProgressView: NSControl {
     private(set) var isHovered = false
     private var pointer: NSPoint?
     private var tracking: NSTrackingArea?
-    private let hoverTime = NSTextField(labelWithString: "")
+    let hoverTime: NSTextField = HoverTimestamp(labelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -29,9 +33,11 @@ final class ProgressView: NSControl {
         hoverTime.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         hoverTime.textColor = .white
         hoverTime.alignment = .center
+        hoverTime.wantsLayer = true
+        hoverTime.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        hoverTime.layer?.cornerRadius = 4
         hoverTime.isHidden = true
         hoverTime.setAccessibilityElement(false)
-        addSubview(hoverTime)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -54,7 +60,8 @@ final class ProgressView: NSControl {
         hoverTime.stringValue = PlaybackTime.string(position)
         let width = hoverTime.intrinsicContentSize.width + 8
         let center = min(bounds.width - width / 2, max(width / 2, pointer.x))
-        hoverTime.frame = NSRect(x: center - width / 2, y: lineY + 12, width: width, height: 18)
+        let rect = NSRect(x: center - width / 2, y: lineY + 34, width: width, height: 18)
+        hoverTime.frame = convert(rect, to: superview)
         hoverTime.isHidden = false
     }
     override func layout() { super.layout(); updateHoverTime() }

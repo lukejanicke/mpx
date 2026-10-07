@@ -213,7 +213,9 @@ final class PlaybackIntegrationTests: XCTestCase {
                 started = true
                 ready.fulfill()
                 let bar = player.progress
-                XCTAssertEqual(bar.trackWidth, player.surface.bounds.width * 0.9, accuracy: 1)
+                let videoWidth = player.surface.bounds.width
+                let margin = min(16, max(4, (videoWidth - 272) / 2))
+                XCTAssertEqual(bar.trackWidth, videoWidth - 2 * margin - 39, accuracy: 1)
                 bar.beginInteraction(at: bar.thumbCenter)
                 bar.drag(to: NSPoint(x: 5 + (bar.bounds.width - 10) * 20 / state.duration, y: bar.bounds.midY))
                 XCTAssertTrue(bar.isThumbVisible)
@@ -302,12 +304,39 @@ final class PlaybackIntegrationTests: XCTestCase {
             XCTAssertFalse(utilities.intersects(transport))
             XCTAssertFalse(time.intersects(utilities))
             for button in controls.transport.views {
-                XCTAssertEqual(button.frame.width, 34, accuracy: 0.5)
-                // AppKit's alignment insets extend a symbol button's frame
-                // beyond its 36-point layout rectangle.
-                XCTAssertGreaterThanOrEqual(button.frame.height, 36)
+                XCTAssertEqual(button.frame.width, 44, accuracy: 0.5)
+                XCTAssertEqual(button.frame.height, 44, accuracy: 0.5)
+                let imageRect = (button as! NSButton).cell!.imageRect(forBounds: button.bounds)
+                XCTAssertEqual(imageRect.midX, button.bounds.midX, accuracy: 0.5)
+                XCTAssertEqual(imageRect.midY, button.bounds.midY, accuracy: 0.5)
             }
-            XCTAssertEqual(controls.isCompact, width < 606)
+            XCTAssertEqual(controls.isCompact, controls.height(for: width) > 44)
+        }
+    }
+
+    func testPanelContainsCentredHitAreasAndTimestampIsNoninteractive() throws {
+        let player = try makePlayer()
+        defer { player.shutdown() }
+        for width in [900.0, 600.0, 280.0] {
+            player.window!.setContentSize(NSSize(width: width, height: width * 9 / 16))
+            player.surface.layoutSubtreeIfNeeded()
+            let controls = player.surface.subviews.compactMap { $0 as? ControlsView }.first!
+            let panel = player.controlsPanelFrame
+            XCTAssertEqual(panel.minX, panel.minY, accuracy: 0.5)
+            XCTAssertEqual(player.surface.bounds.maxX - panel.maxX, panel.minY, accuracy: 0.5)
+            XCTAssertEqual(controls.frame.minY - panel.minY, 16, accuracy: 0.5)
+            XCTAssertEqual(panel.maxY - player.progress.frame.maxY, 16, accuracy: 0.5)
+            XCTAssertTrue(panel.contains(player.progress.frame))
+            for button in controls.transport.views + [controls.fullscreen] {
+                XCTAssertTrue(panel.contains(button.convert(button.bounds, to: player.surface)))
+            }
+            XCTAssertEqual(player.progress.bounds.height, 24)
+            XCTAssertEqual(player.progress.thumbCenter.y, player.progress.bounds.midY)
+            player.progress.update(position: 10, duration: 90)
+            player.progress.pointerMoved(to: player.progress.thumbCenter)
+            XCTAssertGreaterThan(player.progress.hoverTime.frame.minY, panel.maxY)
+            XCTAssertNil(player.progress.hoverTime.hitTest(player.progress.hoverTime.frame.origin))
+            XCTAssertTrue(player.progress.hoverTime.superview === player.surface)
         }
     }
 
