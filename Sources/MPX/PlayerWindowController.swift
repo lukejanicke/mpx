@@ -110,7 +110,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         controls = ControlsView(start: { [weak self] in self?.goToStart() }, back: { [weak self] in self?.skip(-10) },
                                 toggle: { [weak self] in self?.togglePlayback() }, forward: { [weak self] in self?.skip(10) },
                                 end: { [weak self] in self?.goToEnd() },
-                                full: { [weak self] in self?.toggleFullscreen() })
+                                full: { [weak self] in self?.toggleFullscreen() }, mute: { [weak self] in self?.toggleMute() })
         controls.hoverChanged = { [weak self] entered in if entered { self?.showControls() } else { self?.scheduleHide() } }
         controls.timeClicked = { [weak self] in self?.goToTime() }
         surface.addSubview(controls)
@@ -284,6 +284,11 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         showFeedback(snapshot.muted ? "Muted" : "Unmuted")
         showControls()
     }
+    func adjustVolume(by delta: Double) {
+        let baseline = snapshot.muted && delta > 0 && !scanActive ? 0 : snapshot.volume
+        setVolume(baseline + delta)
+    }
+
     func setVolume(_ value: Double) {
         guard fileURL != nil else { return }
         snapshot.volume = min(100, max(0, value))
@@ -354,17 +359,22 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         let videoWidth = fileURL == nil ? surface.bounds.width : fitted.width
         let videoHeight = fileURL == nil ? surface.bounds.height : fitted.height
         // Match the panel's side and bottom margins; ease them in tiny windows.
-        let margin = min(16, max(4, (videoWidth - 272) / 2))
-        let width = max(1, videoWidth - 2 * margin - 32)
-        let size = NSSize(width: width, height: controls.height(for: width))
-        let inset = margin + 16
+        let margin = min(16, max(4, (videoWidth - 273) / 2))
+        let width = max(1, videoWidth - 2 * margin - 16)
+        // Rounded stroke caps extend 1.5 points past their centre endpoints.
+        let controlWidth = max(1, width - 21)
+        let size = NSSize(width: controlWidth, height: controls.height(for: controlWidth))
+        let inset = margin + 18.5
         controls.frame = NSRect(x: surface.bounds.midX - size.width / 2,
                                y: (surface.bounds.height - videoHeight) / 2 + inset,
                                width: size.width, height: size.height)
         controls.layoutSubtreeIfNeeded()
-        progress.frame = NSRect(x: controls.frame.minX, y: controls.frame.maxY + 8,
+        progress.frame = NSRect(x: surface.bounds.midX - width / 2, y: controls.frame.maxY + 8,
                                 width: width, height: 24)
-        controlsBackdrop.frame = controls.frame.union(progress.frame).insetBy(dx: -16, dy: -16)
+        controlsBackdrop.frame = controls.frame.union(progress.frame).insetBy(dx: -8, dy: -8)
+        // Match the lower hover boxes' bottom padding to their side padding.
+        controlsBackdrop.frame.origin.y -= 10.5
+        controlsBackdrop.frame.size.height += 10.5
 
     }
 
@@ -439,7 +449,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
             if event.type == .keyDown, !event.isARepeat { togglePlayback() }
             return true
         case 126, 125:
-            if event.type == .keyDown { setVolume(snapshot.volume + (event.keyCode == 126 ? 5 : -5)) }
+            if event.type == .keyDown { adjustVolume(by: event.keyCode == 126 ? 5 : -5) }
             return true
         case 46:
             if event.type == .keyDown, !event.isARepeat { toggleMute() }

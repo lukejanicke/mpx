@@ -15,9 +15,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
 import urllib.parse
 import zipfile
+
+from app_staging import temporary_app_directory
 
 
 SYSTEM_PREFIXES = ("/System/Library/", "/usr/lib/")
@@ -205,7 +206,7 @@ def main(app_path, output_path):
     formulae = formula_metadata(libraries)
     name = f"mpx-{version}-macos-arm64"
     source_name = f"mpx-{version}-dependency-sources"
-    with tempfile.TemporaryDirectory(prefix="mpx-package-") as staging:
+    with temporary_app_directory(prefix="mpx-package-") as staging:
         staging = Path(staging)
         app = staging / "mpx.app"
         shutil.copytree(app_path, app)

@@ -6,13 +6,14 @@ import plistlib
 import shutil
 import subprocess
 import sys
-import tempfile
+
+from app_staging import temporary_app_directory
 
 from package import dependencies, SYSTEM_PREFIXES
 
 
 def verify(archive, test_directory=None):
-    with tempfile.TemporaryDirectory(prefix="mpx-release-check-") as staging:
+    with temporary_app_directory(prefix="mpx-release-check-") as staging:
         root = Path(staging)
         subprocess.run(["ditto", "-x", "-k", str(archive), str(root)], check=True)
         app = root / "mpx.app"

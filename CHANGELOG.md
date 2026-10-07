@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.7] - 2026-10-07
+
+- Refine overlay spacing, scrub-line alignment, and equal padding around time text.
+- Add subtle button hover highlights and use the standard arrow cursor.
+- Make the speaker a clickable mute/unmute button; Volume Up while muted now starts at 5% and saves that as the new volume.
+- Apply AVFoundation volume and mute at its per-player renderer, preserving the volume curve while avoiding changes waiting behind queued audio.
+- Keep temporary app bundles out of Spotlight and clean up their Launch Services registrations.
+
 ## [0.1.6] - 2026-10-07
 
 - Improve control readability with a translucent black panel, rounded corners, and consistent margins and padding.

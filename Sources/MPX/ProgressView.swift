@@ -1,7 +1,30 @@
 import AppKit
+import CoreText
 import PlayerLogic
 
-private final class HoverTimestamp: NSTextField {
+final class HoverTimestamp: NSView {
+    var stringValue = "" { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    var textColor = NSColor.white
+
+    private var textLine: CTLine {
+        CTLineCreateWithAttributedString(NSAttributedString(string: stringValue,
+            attributes: [.font: font, .foregroundColor: textColor]))
+    }
+    override var intrinsicContentSize: NSSize {
+        let ink = CTLineGetBoundsWithOptions(textLine, .useGlyphPathBounds)
+        return NSSize(width: ceil(ink.width) + 8, height: ceil(ink.height) + 8)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let line = textLine
+        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        context.saveGState()
+        context.textMatrix = .identity
+        context.textPosition = CGPoint(x: bounds.midX - ink.midX, y: bounds.midY - ink.midY)
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -18,7 +41,7 @@ final class ProgressView: NSControl {
     private(set) var isHovered = false
     private var pointer: NSPoint?
     private var tracking: NSTrackingArea?
-    let hoverTime: NSTextField = HoverTimestamp(labelWithString: "")
+    let hoverTime = HoverTimestamp(frame: .zero)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -32,7 +55,6 @@ final class ProgressView: NSControl {
         toolTip = "Click to seek · Drag to scrub"
         hoverTime.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         hoverTime.textColor = .white
-        hoverTime.alignment = .center
         hoverTime.wantsLayer = true
         hoverTime.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.65).cgColor
         hoverTime.layer?.cornerRadius = 4
@@ -42,9 +64,9 @@ final class ProgressView: NSControl {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    // Leave room for the whole thumb at the stroke's endpoints.
-    private var lineStart: CGFloat { 5 }
-    private var lineEnd: CGFloat { max(lineStart, bounds.width - 5) }
+    // The hit area extends 12 points from the line centre at each edge.
+    private var lineStart: CGFloat { 12 }
+    private var lineEnd: CGFloat { max(lineStart, bounds.width - 12) }
     var trackWidth: CGFloat { lineEnd - lineStart + 3 }
     private var lineY: CGFloat { min(12, bounds.midY) }
     var thumbCenter: NSPoint {
@@ -58,14 +80,14 @@ final class ProgressView: NSControl {
     private func updateHoverTime() {
         guard let position = hoverPosition, let pointer else { hoverTime.isHidden = true; return }
         hoverTime.stringValue = PlaybackTime.string(position)
-        let width = hoverTime.intrinsicContentSize.width + 8
+        let size = hoverTime.intrinsicContentSize
+        let width = size.width
         let center = min(bounds.width - width / 2, max(width / 2, pointer.x))
-        let rect = NSRect(x: center - width / 2, y: lineY + 34, width: width, height: 18)
+        let rect = NSRect(x: center - width / 2, y: lineY + 34, width: width, height: size.height)
         hoverTime.frame = convert(rect, to: superview)
         hoverTime.isHidden = false
     }
     override func layout() { super.layout(); updateHoverTime() }
-    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
     var isThumbVisible: Bool {
         guard isEnabled else { return false }
         if isDragging { return true }

@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import PlayerLogic
 
 private final class CentredButtonCell: NSButtonCell {
@@ -14,7 +15,26 @@ private final class CentredButtonCell: NSButtonCell {
     }
 }
 
-final class SymbolButton: NSButton {
+class OverlayButton: NSButton {
+    private var hoverTracking: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        hoverTracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(hoverTracking!)
+    }
+    override func mouseEntered(with event: NSEvent) {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+    }
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+}
+
+final class SymbolButton: OverlayButton {
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
     var actionHandler: (() -> Void)?
 
@@ -42,7 +62,6 @@ final class SymbolButton: NSButton {
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: size, weight: .regular))
     }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
         layer?.transform = CATransform3DMakeTranslation(0, flag ? -1 : 0, 0)
@@ -50,11 +69,34 @@ final class SymbolButton: NSButton {
     @objc private func performAction() { actionHandler?() }
 }
 
-private final class TimeButton: NSButton {
+private final class TimeButton: OverlayButton {
+    private var textLine: CTLine {
+        CTLineCreateWithAttributedString(NSAttributedString(string: title,
+            attributes: [.font: font ?? NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.white]))
+    }
+    func width(for font: NSFont) -> CGFloat {
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: title, attributes: [.font: font]))
+        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        // Match horizontal padding to the ink's existing padding in a 44-point target.
+        return ink.width + 44 - ink.height
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let line = textLine
+        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        context.saveGState()
+        if isFlipped {
+            context.translateBy(x: 0, y: bounds.height)
+            context.scaleBy(x: 1, y: -1)
+        }
+        context.textMatrix = .identity
+        context.textPosition = CGPoint(x: bounds.midX - ink.midX, y: bounds.midY - ink.midY)
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
     override init(frame: NSRect) { super.init(frame: frame); cell = CentredButtonCell() }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
         layer?.transform = CATransform3DMakeTranslation(0, flag ? -1 : 0, 0)
@@ -63,7 +105,7 @@ private final class TimeButton: NSButton {
 
 final class ControlsView: NSView {
     let play = SymbolButton(symbol: "play.fill", label: "Play / Pause (Space)", size: 23)
-    private let volume = NSImageView()
+    let volume = SymbolButton(symbol: "speaker.wave.2.fill", label: "Mute / Unmute (M)", size: 20)
     let fullscreen = SymbolButton(symbol: "arrow.up.left.and.arrow.down.right", label: "Toggle Full Screen (Control–Command–F)", size: 18)
     private let time = TimeButton(title: "00:00:00 / 00:00:00", target: nil, action: nil)
     private var tracking: NSTrackingArea?
@@ -76,7 +118,7 @@ final class ControlsView: NSView {
     private(set) var isHovered = false
 
     init(start: @escaping () -> Void, back: @escaping () -> Void, toggle: @escaping () -> Void,
-         forward: @escaping () -> Void, end: @escaping () -> Void, full: @escaping () -> Void) {
+         forward: @escaping () -> Void, end: @escaping () -> Void, full: @escaping () -> Void, mute: @escaping () -> Void) {
         super.init(frame: .zero)
         wantsLayer = true
         let beginning = SymbolButton(symbol: "backward.end.fill", label: "Go to Start (Option–Left Arrow)")
@@ -86,12 +128,8 @@ final class ControlsView: NSView {
         beginning.actionHandler = start; rewind.actionHandler = back; play.actionHandler = toggle
         advance.actionHandler = forward; ending.actionHandler = end
         fullscreen.actionHandler = full
-        volume.contentTintColor = .white
-        volume.alphaValue = 1
-        volume.imageScaling = .scaleProportionallyDown
-        volume.toolTip = "Volume: Up / Down · Mute: M"
-        volume.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([volume.widthAnchor.constraint(equalToConstant: 34), volume.heightAnchor.constraint(equalToConstant: 44)])
+        volume.actionHandler = mute
+        volume.toolTip = "Click to mute / unmute · Volume: Up / Down · Mute: M"
 
         time.isBordered = false
         time.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
@@ -109,7 +147,7 @@ final class ControlsView: NSView {
             stack.alignment = .centerY
             addSubview(stack)
         }
-        transport.spacing = 10
+        transport.spacing = 4
         utilities.spacing = 8
         addSubview(time)
     }
@@ -122,20 +160,21 @@ final class ControlsView: NSView {
     /// scaling their symbols or click targets down.
     func height(for width: CGFloat) -> CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        let timeWidth = ceil((time.title as NSString).size(withAttributes: [.font: font]).width) + 16
-        return width >= 260 + 2 * (timeWidth + 20) ? 44 : 94
+        let timeWidth = time.width(for: font)
+        return width >= 236 + 2 * (timeWidth + 20) ? 44 : 94
     }
 
     override func layout() {
         super.layout()
         isCompact = height(for: bounds.width) > 44
-        transport.spacing = isCompact ? min(8, max(0, (bounds.width - 220) / 4)) : 10
+        transport.spacing = min(4, max(0, (bounds.width - 220) / 4))
         let transportWidth = transport.fittingSize.width
+        utilities.spacing = isCompact ? 4 : 8
         let utilityWidth = utilities.fittingSize.width
         transport.frame = NSRect(x: bounds.midX - transportWidth / 2, y: 0, width: transportWidth, height: 44)
         time.font = .monospacedDigitSystemFont(ofSize: isCompact ? 11 : 13, weight: .medium)
-        time.alignment = .left
-        let timeWidth = ceil((time.title as NSString).size(withAttributes: [.font: time.font!]).width) + 16
+        time.alignment = .center
+        let timeWidth = time.width(for: time.font!)
         let informationY: CGFloat = isCompact ? 50 : 0
         time.frame = NSRect(x: 0, y: informationY, width: timeWidth, height: 44)
         utilities.frame = NSRect(x: bounds.width - utilityWidth, y: informationY, width: utilityWidth, height: 44)
@@ -149,7 +188,7 @@ final class ControlsView: NSView {
         let symbol = Self.volumeSymbol(volume: state.volume, muted: state.muted)
         volume.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: 20, weight: .regular))
-        volume.setAccessibilityLabel(state.muted ? "Muted" : "Volume \(Int(state.volume))%")
+        volume.setAccessibilityLabel(state.muted ? "Unmute (volume \(Int(state.volume))%)" : "Mute (volume \(Int(state.volume))%)")
     }
 
     func setFullscreen(_ value: Bool) {

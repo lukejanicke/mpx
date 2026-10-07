@@ -9,7 +9,40 @@ if ! pkg-config --exists mpv; then
 fi
 swift build -c release
 bin_dir=$(swift build -c release --show-bin-path)
-stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/mpx-build.XXXXXX")
+stage_parent=$(mktemp -d "${TMPDIR:-/tmp}/mpx-build.XXXXXX")
+stage_dir="$stage_parent/staging.noindex"
+mkdir -p "$stage_dir"
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+cleanup() {
+    status=$?
+    trap - 0 HUP INT TERM
+    # Restore the old app if replacement was interrupted after moving it aside.
+    if [ -d "$stage_dir/previous-mpx.app" ] && [ ! -d "$project_dir/build/mpx.app" ]; then
+        mv "$stage_dir/previous-mpx.app" "$project_dir/build/mpx.app"
+    fi
+    for bundle in "$stage_dir/mpx.app" "$stage_dir/previous-mpx.app"; do
+        if [ -d "$bundle" ]; then
+            "$lsregister" -u "$bundle" >/dev/null 2>&1 || true
+        fi
+    done
+    previous_binary="$stage_dir/previous-mpx.app/Contents/MacOS/mpx-app"
+    if [ -f "$previous_binary" ] && /usr/sbin/lsof -t "$previous_binary" >/dev/null 2>&1; then
+        # Release mapped pages only after the running previous build exits.
+        (
+            while /usr/sbin/lsof -t "$previous_binary" >/dev/null 2>&1; do
+                sleep 2
+            done
+            rm -rf "$stage_parent"
+        ) </dev/null >/dev/null 2>&1 &
+    else
+        rm -rf "$stage_parent"
+    fi
+    exit "$status"
+}
+trap cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 app_dir="$stage_dir/mpx.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$bin_dir/mpx-app" "$app_dir/Contents/MacOS/mpx-app"

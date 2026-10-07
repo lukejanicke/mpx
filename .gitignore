@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 # Local design-conversation notes are not part of the published source.
 DESIGN.md
+
+# Private local investigation records, excluded from Spotlight.
+notes.noindex/

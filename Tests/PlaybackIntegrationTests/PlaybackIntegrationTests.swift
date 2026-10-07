@@ -1,6 +1,7 @@
 import XCTest
 import CMPV
 import AppKit
+import CoreText
 @testable import MPX
 
 final class PlaybackIntegrationTests: XCTestCase {
@@ -214,10 +215,10 @@ final class PlaybackIntegrationTests: XCTestCase {
                 ready.fulfill()
                 let bar = player.progress
                 let videoWidth = player.surface.bounds.width
-                let margin = min(16, max(4, (videoWidth - 272) / 2))
-                XCTAssertEqual(bar.trackWidth, videoWidth - 2 * margin - 39, accuracy: 1)
+                let margin = min(16, max(4, (videoWidth - 273) / 2))
+                XCTAssertEqual(bar.trackWidth, videoWidth - 2 * margin - 37, accuracy: 1)
                 bar.beginInteraction(at: bar.thumbCenter)
-                bar.drag(to: NSPoint(x: 5 + (bar.bounds.width - 10) * 20 / state.duration, y: bar.bounds.midY))
+                bar.drag(to: NSPoint(x: 12 + (bar.bounds.width - 24) * 20 / state.duration, y: bar.bounds.midY))
                 XCTAssertTrue(bar.isThumbVisible)
             } else if started, !released, state.paused, abs(state.position - 20) < 0.2 {
                 preview.fulfill()
@@ -289,8 +290,8 @@ final class PlaybackIntegrationTests: XCTestCase {
 
     func testOverlayGroupsStayCentredAndDoNotOverlapInSmallWindows() {
         _ = NSApplication.shared
-        let controls = ControlsView(start: {}, back: {}, toggle: {}, forward: {}, end: {}, full: {})
-        for width in [900.0, 680.0, 600.0, 400.0, 252.0, 680.0] {
+        let controls = ControlsView(start: {}, back: {}, toggle: {}, forward: {}, end: {}, full: {}, mute: {})
+        for width in [900.0, 680.0, 600.0, 400.0, 252.0, 235.0, 680.0] {
             controls.frame = NSRect(x: 0, y: 0, width: width, height: controls.height(for: width))
             controls.needsLayout = true
             controls.layoutSubtreeIfNeeded()
@@ -299,6 +300,11 @@ final class PlaybackIntegrationTests: XCTestCase {
             let time = controls.timeFrame
             XCTAssertEqual(transport.midX, width / 2, accuracy: 0.5)
             XCTAssertEqual(time.minX, 0, accuracy: 0.5)
+            let timeButton = controls.subviews.compactMap { $0 as? NSButton }.first!
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: timeButton.title,
+                attributes: [.font: timeButton.font!]))
+            let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            XCTAssertEqual((time.width - ink.width) / 2, (time.height - ink.height) / 2, accuracy: 0.01)
             XCTAssertEqual(utilities.maxX, width, accuracy: 0.5)
             XCTAssertFalse(time.intersects(transport))
             XCTAssertFalse(utilities.intersects(transport))
@@ -324,10 +330,21 @@ final class PlaybackIntegrationTests: XCTestCase {
             let panel = player.controlsPanelFrame
             XCTAssertEqual(panel.minX, panel.minY, accuracy: 0.5)
             XCTAssertEqual(player.surface.bounds.maxX - panel.maxX, panel.minY, accuracy: 0.5)
-            XCTAssertEqual(controls.frame.minY - panel.minY, 16, accuracy: 0.5)
-            XCTAssertEqual(panel.maxY - player.progress.frame.maxY, 16, accuracy: 0.5)
+            XCTAssertEqual(controls.frame.minY - panel.minY, 18.5, accuracy: 0.5)
+            XCTAssertEqual(controls.frame.minY - panel.minY, controls.frame.minX - panel.minX, accuracy: 0.5)
+            XCTAssertEqual(panel.maxY - player.progress.frame.maxY, 8, accuracy: 0.5)
             XCTAssertTrue(panel.contains(player.progress.frame))
-            for button in controls.transport.views + [controls.fullscreen] {
+            XCTAssertEqual(player.progress.frame.minX - panel.minX, 8, accuracy: 0.5)
+            XCTAssertEqual(panel.maxX - player.progress.frame.maxX, 8, accuracy: 0.5)
+            let visibleLeft = player.progress.frame.minX + 10.5
+            let visibleRight = player.progress.frame.maxX - 10.5
+            XCTAssertEqual(visibleLeft - panel.minX, panel.maxY - player.progress.frame.midY - 1.5, accuracy: 0.5)
+            XCTAssertEqual(controls.frame.minX, visibleLeft, accuracy: 0.5)
+            XCTAssertEqual(controls.frame.maxX, visibleRight, accuracy: 0.5)
+            XCTAssertEqual(player.progress.frame.minY - controls.frame.maxY, 8)
+            XCTAssertEqual(player.progress.frame.midY - 1.5 - controls.frame.maxY, 18.5)
+            if !controls.isCompact { XCTAssertEqual(panel.height, 102.5) }
+            for button in controls.transport.views + [controls.volume, controls.fullscreen] {
                 XCTAssertTrue(panel.contains(button.convert(button.bounds, to: player.surface)))
             }
             XCTAssertEqual(player.progress.bounds.height, 24)
@@ -337,6 +354,78 @@ final class PlaybackIntegrationTests: XCTestCase {
             XCTAssertGreaterThan(player.progress.hoverTime.frame.minY, panel.maxY)
             XCTAssertNil(player.progress.hoverTime.hitTest(player.progress.hoverTime.frame.origin))
             XCTAssertTrue(player.progress.hoverTime.superview === player.surface)
+        }
+    }
+
+    func testVolumeButtonTogglesMuteWithoutChangingVolume() throws {
+        guard let path = ProcessInfo.processInfo.environment["MPX_TEST_VIDEO_PATH"] else { throw XCTSkip("Set MPX_TEST_VIDEO_PATH.") }
+        let historyFile = FileManager.default.temporaryDirectory.appendingPathComponent("mpx-volume-test-\(UUID().uuidString).json")
+        let savedVolume = UserDefaults.standard.object(forKey: "volume")
+        defer {
+            if let savedVolume { UserDefaults.standard.set(savedVolume, forKey: "volume") }
+            else { UserDefaults.standard.removeObject(forKey: "volume") }
+        }
+        let player = try makePlayer(history: HistoryStore(file: historyFile))
+        defer { player.shutdown(); try? FileManager.default.removeItem(at: historyFile) }
+        let loaded = expectation(description: "Video loaded before muting")
+        let original = player.engine.onEvent
+        var ready = false
+        player.engine.onEvent = { event in
+            original?(event)
+            if case .snapshot(let state) = event, state.duration > 0, !ready {
+                ready = true
+                loaded.fulfill()
+            }
+        }
+        player.open(URL(fileURLWithPath: path))
+        wait(for: [loaded], timeout: 5)
+        let controls = player.surface.subviews.compactMap { $0 as? ControlsView }.first!
+        let volume = player.snapshot.volume
+        let muted = player.snapshot.muted
+        for expected in [!muted, muted] {
+            let verified = expectation(description: "Button updates engine mute to \(expected)")
+            let pressedAt = ProcessInfo.processInfo.systemUptime
+            controls.volume.performClick(nil)
+            XCTAssertEqual(player.snapshot.muted, expected)
+            XCTAssertEqual(player.snapshot.volume, volume)
+            player.engine.inspectProperty("mute") { value in
+                print("Mute command round trip: \(Int((ProcessInfo.processInfo.systemUptime - pressedAt) * 1000)) ms")
+                XCTAssertEqual(value as? Bool, expected)
+                verified.fulfill()
+            }
+            wait(for: [verified], timeout: 5)
+        }
+        if !player.snapshot.muted { player.toggleMute() }
+        player.adjustVolume(by: 5)
+        XCTAssertFalse(player.snapshot.muted)
+        XCTAssertEqual(player.snapshot.volume, 5)
+        XCTAssertEqual(UserDefaults.standard.double(forKey: "volume"), 5)
+        let raised = expectation(description: "Muted volume up sets engine volume to five")
+        player.engine.inspectProperty("volume") { value in
+            XCTAssertEqual(value as? Double ?? -1, 5, accuracy: 0.001)
+            raised.fulfill()
+        }
+        wait(for: [raised], timeout: 5)
+        let output = expectation(description: "Inspect active audio output")
+        var audioOutput: String?
+        player.engine.inspectProperty("current-ao") { value in
+            audioOutput = value as? String
+            print("Audio control test output: \(audioOutput ?? "none")")
+            output.fulfill()
+        }
+        wait(for: [output], timeout: 5)
+        if audioOutput == "avfoundation" {
+            let renderer = expectation(description: "AVFoundation renderer receives volume and mute")
+            renderer.expectedFulfillmentCount = 2
+            player.engine.inspectProperty("ao-volume") { value in
+                XCTAssertEqual(value as? Double ?? -1, 0.0125, accuracy: 0.0001)
+                renderer.fulfill()
+            }
+            player.engine.inspectProperty("ao-mute") { value in
+                XCTAssertEqual(value as? Bool, false)
+                renderer.fulfill()
+            }
+            wait(for: [renderer], timeout: 5)
         }
     }
 

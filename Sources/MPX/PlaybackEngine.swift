@@ -39,6 +39,9 @@ final class PlaybackEngine {
     private(set) var handle: OpaquePointer?
     private let queue = DispatchQueue(label: "mpx.playback", qos: .userInitiated)
     private var state = PlaybackSnapshot()
+    private var requestedVolume = 100.0
+    private var requestedMute = false
+    private var usesOutputControls = false
     var onEvent: ((PlaybackEvent) -> Void)?
 
     init(headless: Bool = false) throws {
@@ -71,6 +74,7 @@ final class PlaybackEngine {
             ("time-pos", MPV_FORMAT_DOUBLE), ("duration", MPV_FORMAT_DOUBLE),
             ("pause", MPV_FORMAT_FLAG), ("volume", MPV_FORMAT_DOUBLE),
             ("mute", MPV_FORMAT_FLAG), ("eof-reached", MPV_FORMAT_FLAG),
+            ("ao-volume", MPV_FORMAT_DOUBLE), ("ao-mute", MPV_FORMAT_FLAG),
             ("video-out-params", MPV_FORMAT_NODE), ("track-list", MPV_FORMAT_NODE)
         ]
         for (index, property) in properties.enumerated() {
@@ -95,7 +99,47 @@ final class PlaybackEngine {
         }
     }
 
-    func set(_ property: String, _ value: String) { command(["set", property, value]) }
+    func set(_ property: String, _ value: String) {
+        guard property == "volume" || property == "mute" else { command(["set", property, value]); return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            if property == "volume", let volume = Double(value) { self.requestedVolume = volume }
+            if property == "mute" { self.requestedMute = value == "yes" }
+            self.applyAudioControls()
+        }
+    }
+
+    /// AVFoundation queues about two seconds of audio. Apply gain at its renderer
+    /// so volume and mute affect already-queued samples, rather than future samples.
+    /// Its controls are per renderer; this does not change the Mac's system volume.
+    private func applyAudioControls() {
+        guard let handle else { return }
+        var isAVFoundation = false
+        if let driver = mpv_get_property_string(handle, "current-ao") {
+            isAVFoundation = String(cString: driver) == "avfoundation"
+            mpv_free(driver)
+        }
+        if isAVFoundation {
+            // Preserve mpv's cubic volume curve when using the renderer's linear gain.
+            let volumeStatus = mpv_set_property_string(handle, "ao-volume", String(pow(max(0, requestedVolume) / 100, 3) * 100))
+            let muteStatus = mpv_set_property_string(handle, "ao-mute", requestedMute ? "yes" : "no")
+            usesOutputControls = volumeStatus >= 0 && muteStatus >= 0
+            if !usesOutputControls {
+                // Avoid combining a partial output adjustment with software gain.
+                _ = mpv_set_property_string(handle, "ao-volume", "100")
+                _ = mpv_set_property_string(handle, "ao-mute", "no")
+            }
+        } else {
+            usesOutputControls = false
+        }
+        let volumeStatus = mpv_set_property_string(handle, "volume", usesOutputControls ? "100" : String(requestedVolume))
+        let muteStatus = mpv_set_property_string(handle, "mute", usesOutputControls ? "no" : (requestedMute ? "yes" : "no"))
+        if volumeStatus < 0 { emit(.failure(Self.error(volumeStatus))) }
+        if muteStatus < 0 { emit(.failure(Self.error(muteStatus))) }
+        state.volume = requestedVolume
+        state.muted = requestedMute
+        emit(.snapshot(state))
+    }
 
     #if DEBUG
     /// Inspect render geometry in integration tests without querying the core
@@ -104,8 +148,13 @@ final class PlaybackEngine {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { DispatchQueue.main.async { completion(nil) }; return }
             var node = mpv_node()
-            let result = mpv_get_property(handle, name, MPV_FORMAT_NODE, &node)
-            let value = result >= 0 ? Self.decode(node) : nil
+            // Inspect the property that implements this app's logical audio control.
+            let property = self.usesOutputControls && (name == "volume" || name == "mute") ? "ao-" + name : name
+            let result = mpv_get_property(handle, property, MPV_FORMAT_NODE, &node)
+            var value = result >= 0 ? Self.decode(node) : nil
+            if name == "volume", self.usesOutputControls, let gain = value as? Double {
+                value = pow(max(0, gain) / 100, 1.0 / 3.0) * 100
+            }
             if result >= 0 { mpv_free_node_contents(&node) }
             DispatchQueue.main.async { completion(value) }
         }
@@ -144,6 +193,7 @@ final class PlaybackEngine {
             let event = pointer.pointee
             switch event.event_id {
             case MPV_EVENT_FILE_LOADED: emit(.loaded)
+            case MPV_EVENT_AUDIO_RECONFIG: applyAudioControls()
             case MPV_EVENT_END_FILE:
                 if let data = event.data?.assumingMemoryBound(to: mpv_event_end_file.self), data.pointee.reason == MPV_END_FILE_REASON_ERROR {
                     emit(.failure("Could not play this file: \(Self.error(data.pointee.error))"))
@@ -156,8 +206,15 @@ final class PlaybackEngine {
                 case "time-pos": state.position = data.assumingMemoryBound(to: Double.self).pointee
                 case "duration": state.duration = data.assumingMemoryBound(to: Double.self).pointee
                 case "pause": state.paused = data.assumingMemoryBound(to: Int32.self).pointee != 0
-                case "volume": state.volume = data.assumingMemoryBound(to: Double.self).pointee
-                case "mute": state.muted = data.assumingMemoryBound(to: Int32.self).pointee != 0
+                case "volume":
+                    if !usesOutputControls { state.volume = data.assumingMemoryBound(to: Double.self).pointee }
+                case "mute":
+                    if !usesOutputControls { state.muted = data.assumingMemoryBound(to: Int32.self).pointee != 0 }
+                case "ao-volume":
+                    // Keep the logical percentage exact despite the renderer's float gain.
+                    if usesOutputControls { state.volume = requestedVolume }
+                case "ao-mute":
+                    if usesOutputControls { state.muted = data.assumingMemoryBound(to: Int32.self).pointee != 0 }
                 case "eof-reached": state.eof = data.assumingMemoryBound(to: Int32.self).pointee != 0
                 case "video-out-params":
                     let node = Self.decode(data.assumingMemoryBound(to: mpv_node.self).pointee) as? [String: Any] ?? [:]

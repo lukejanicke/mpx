@@ -8,7 +8,7 @@ Use `MAJOR.MINOR.PATCH` versions and matching Git tags such as `v0.1.5`. The ini
 
 Pushing an approved `vMAJOR.MINOR.PATCH` tag triggers `.github/workflows/release.yml`. It checks tag/version agreement, builds on GitHub's Apple silicon `xcode-27` runner, runs the tests, packages the app and dependency sources, checks relocation and signatures, and repeats tests against the bundled libraries with reads from `/opt/homebrew` denied. The release is published only after those steps pass.
 
-Hosted macOS VMs may not provide accelerated OpenGL. The workflow explicitly allows eight display-dependent tests to skip only when creating that display fails; codec decoding, resume/seek, playback errors, geometry logic, overlay layout and timeline tests still run. Other playback/rendering errors remain failures. **Run the complete 21-test suite and inspect playback on a supported physical Mac before approving a release tag.** The full local suite does not enable these skips by default.
+Hosted macOS VMs may not provide accelerated OpenGL. The workflow explicitly allows nine display-dependent tests to skip only when creating that display fails; codec decoding, resume/seek, playback errors, geometry logic, overlay layout and timeline tests still run. Other playback/rendering errors remain failures. **Run the complete 22-test suite and inspect playback on a supported physical Mac before approving a release tag.** The full local suite does not enable these skips by default.
 
 Only push a version tag after the maintainer approves the release. Ordinary commits do not publish an app. The workflow can also be run manually against `main` to perform a preflight build without publishing. It uploads its packages as workflow artifacts for inspection.
 
@@ -32,6 +32,8 @@ scripts/package.sh
 ```
 
 The script first makes the ordinary development build, then packages a separate self-contained release under `build/release/`. It does not replace the development app with the bundled release.
+
+Temporary app bundles live in `.noindex` staging folders and are unregistered from Launch Services before cleanup. Failed or interrupted builds restore the previous development app if replacement has not completed. When a previous build is still running, its temporary copy is removed after it exits. Packaging and verification also clean up on normal termination signals. Forced termination such as `kill -9` or a power loss cannot run cleanup.
 
 The package contains all linked Homebrew libraries. Its dependency paths are rewritten to resolve inside `mpx.app/Contents/Frameworks`. Each library and the outer app are ad-hoc signed, and the signature is verified before archiving. No Developer ID certificate or notarisation is configured.
 
