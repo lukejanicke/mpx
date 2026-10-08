@@ -23,6 +23,13 @@ from libmpv_build import RECIPE, verify_prefix
 
 
 SYSTEM_PREFIXES = ("/System/Library/", "/usr/lib/")
+# freedesktop.org can return HTTP 418 to hosted runners. Debian carries the
+# identical release archive; use it only for this exact source/checksum pair.
+SOURCE_MIRRORS = {
+    "https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz": (
+        "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0",
+        "https://deb.debian.org/debian/pool/main/u/uchardet/uchardet_0.0.8.orig.tar.xz"),
+}
 
 
 def run(*args, **kwargs):
@@ -115,18 +122,35 @@ def fetch_source(task):
     url, _ = source_url(resource)
     key = hashlib.sha256(url.encode()).hexdigest()
     cached = cache / key
+    url_record = cache / (key + ".url")
     if not cached.exists():
         temporary = cache / (key + ".part")
-        subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--connect-timeout", "20",
-                        "--max-time", "300", "--silent", "--show-error", url, "-o", str(temporary)], check=True)
-        temporary.rename(cached)
+        candidates = [url]
+        mirror = SOURCE_MIRRORS.get(url)
+        if mirror and resource.get("sha256") == mirror[0]:
+            candidates.append(mirror[1])
+        for candidate in candidates:
+            try:
+                subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--connect-timeout", "20",
+                                "--max-time", "300", "--silent", "--show-error", candidate, "-o", str(temporary)], check=True)
+            except subprocess.CalledProcessError:
+                if candidate == candidates[-1]:
+                    raise
+                continue
+            expected = resource.get("sha256")
+            if expected and sha256(temporary) != expected:
+                raise RuntimeError(f"Source checksum mismatch: {candidate}")
+            temporary.rename(cached)
+            url_record.write_text(candidate)
+            break
     checksum = sha256(cached)
     expected = resource.get("sha256")
     if expected and checksum != expected:
         raise RuntimeError(f"Source checksum mismatch: {url}")
     shutil.copy2(cached, destination)
     # Git archives are pinned by immutable commit; record their archive checksum.
-    return {**resource, "download_url": url, "archive": destination.name, "archive_sha256": checksum}
+    return {**resource, "download_url": url_record.read_text() if url_record.exists() else url,
+            "archive": destination.name, "archive_sha256": checksum}
 
 
 def is_notice(name):

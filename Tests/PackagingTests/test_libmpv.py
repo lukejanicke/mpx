@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import hashlib
+import subprocess
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from libmpv_build import recipe_hash, sha256, verify_prefix
-from package import inventory
+from package import inventory, fetch_source
 
 
 class LibmpvProvenanceTests(unittest.TestCase):
@@ -51,6 +53,44 @@ class LibmpvProvenanceTests(unittest.TestCase):
         with patch("package.dependencies", side_effect=links):
             with self.assertRaisesRegex(RuntimeError, "verified libmpv dependency"):
                 inventory(executable, self.library)
+
+
+class SourceMirrorTests(unittest.TestCase):
+    def test_transport_failure_uses_identical_archive_and_records_mirror(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            data = b"same source archive"
+            checksum = hashlib.sha256(data).hexdigest()
+            primary, mirror = "https://primary/source.tar.xz", "https://mirror/source.tar.xz"
+            def download(args, **kwargs):
+                if primary in args:
+                    raise subprocess.CalledProcessError(22, args)
+                Path(args[-1]).write_bytes(data)
+            with patch("package.SOURCE_MIRRORS", {primary: (checksum, mirror)}), patch("package.subprocess.run", side_effect=download):
+                resource = {"url": primary, "sha256": checksum}
+                result = fetch_source((resource, root / "archive.tar.xz", cache))
+                self.assertEqual(result["download_url"], mirror)
+                self.assertEqual(result["archive_sha256"], checksum)
+                cached = fetch_source((resource, root / "second.tar.xz", cache))
+                self.assertEqual(cached["download_url"], mirror)
+
+    def test_mirror_cannot_bypass_source_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            checksum = hashlib.sha256(b"expected source").hexdigest()
+            primary, mirror = "https://primary/source.tar.xz", "https://mirror/source.tar.xz"
+            def download(args, **kwargs):
+                if primary in args:
+                    raise subprocess.CalledProcessError(22, args)
+                Path(args[-1]).write_bytes(b"wrong source")
+            with patch("package.SOURCE_MIRRORS", {primary: (checksum, mirror)}), patch("package.subprocess.run", side_effect=download):
+                with self.assertRaisesRegex(RuntimeError, "Source checksum mismatch"):
+                    fetch_source(({"url": primary, "sha256": checksum}, root / "archive.tar.xz", cache))
+                self.assertFalse((cache / hashlib.sha256(primary.encode()).hexdigest()).exists())
 
 
 if __name__ == "__main__":
