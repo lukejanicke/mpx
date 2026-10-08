@@ -134,6 +134,8 @@ def fetch_source(task):
     cached = cache / key
     url_record = cache / (key + ".url")
     if not cached.exists():
+        # Discard metadata left by an interrupted download before retrying.
+        url_record.unlink(missing_ok=True)
         temporary = cache / (key + ".part")
         candidates = [url]
         mirror = SOURCE_MIRRORS.get(url)
@@ -157,8 +159,10 @@ def fetch_source(task):
                 raise RuntimeError(f"Source checksum mismatch: {candidate}")
             if not expected and (extension.startswith(".tar.") or extension == ".tgz") and not tarfile.is_tarfile(temporary):
                 raise RuntimeError(f"Invalid source archive: {candidate}")
-            temporary.rename(cached)
+            # Publish bytes only after their provenance has been written.
+            # If interrupted here, a retry discards the orphaned metadata.
             url_record.write_text(candidate)
+            temporary.rename(cached)
             break
     checksum = sha256(cached)
     if expected and checksum != expected:
@@ -167,8 +171,10 @@ def fetch_source(task):
         raise RuntimeError(f"Invalid source archive: {url}")
     shutil.copy2(cached, destination)
     # Git archives are pinned by immutable commit; record their archive checksum.
-    downloaded = url_record.read_text() if url_record.exists() else url
-    if downloaded.startswith("file:"):
+    # Older caches and interrupted metadata writes have no known retrieval
+    # origin. Keep the declared URL above, but do not invent a download URL.
+    downloaded = (url_record.read_text().strip() or None) if url_record.exists() else None
+    if downloaded and downloaded.startswith("file:"):
         # Keep machine-specific checkout paths out of the portable manifest.
         downloaded = "repository:dependencies/source-fallbacks/" + urllib.parse.urlparse(downloaded).path.rsplit("/", 1)[-1]
     return {**resource, "download_url": downloaded,

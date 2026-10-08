@@ -56,6 +56,59 @@ class LibmpvProvenanceTests(unittest.TestCase):
 
 
 class SourceMirrorTests(unittest.TestCase):
+    def test_interrupted_origin_write_does_not_publish_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            data = b"verified mirrored source"
+            checksum = hashlib.sha256(data).hexdigest()
+            primary, mirror = "https://primary/source.tar.xz", "https://mirror/source.tar.xz"
+            key = hashlib.sha256(primary.encode()).hexdigest()
+            origin = cache / (key + ".url")
+            origin.write_text("https://obsolete/source.tar.xz")
+            resource = {"url": primary, "sha256": checksum}
+
+            def download(args, **kwargs):
+                if primary in args:
+                    raise subprocess.CalledProcessError(22, args)
+                Path(args[-1]).write_bytes(data)
+
+            with patch("package.SOURCE_MIRRORS", {primary: (checksum, mirror)}), patch("package.subprocess.run", side_effect=download):
+                with patch.object(Path, "write_text", side_effect=OSError("interrupted metadata write")):
+                    with self.assertRaisesRegex(OSError, "interrupted metadata write"):
+                        fetch_source((resource, root / "first.tar.xz", cache))
+            self.assertFalse((cache / key).exists())
+            self.assertFalse(origin.exists())
+            with patch("package.SOURCE_MIRRORS", {primary: (checksum, mirror)}), patch("package.subprocess.run", side_effect=download):
+                result = fetch_source((resource, root / "second.tar.xz", cache))
+            self.assertEqual(result["url"], primary)
+            self.assertEqual(result["download_url"], mirror)
+            self.assertEqual(result["archive_sha256"], checksum)
+
+    def test_cache_without_origin_still_requires_correct_source_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            primary = "https://primary/source.tar.xz"
+            key = hashlib.sha256(primary.encode()).hexdigest()
+            cached = cache / key
+            data = b"verified source"
+            checksum = hashlib.sha256(data).hexdigest()
+            cached.write_bytes(data)
+            resource = {"url": primary, "sha256": checksum}
+            for origin in (None, "", "\n"):
+                with self.subTest(origin=origin):
+                    if origin is not None:
+                        (cache / (key + ".url")).write_text(origin)
+                    result = fetch_source((resource, root / "source.tar.xz", cache))
+                    self.assertIsNone(result["download_url"])
+                    self.assertEqual(result["archive_sha256"], checksum)
+            cached.write_bytes(b"corrupt source")
+            with self.assertRaisesRegex(RuntimeError, "Source checksum mismatch"):
+                fetch_source((resource, root / "corrupt.tar.xz", cache))
+
     def test_git_archive_cannot_be_an_html_response(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

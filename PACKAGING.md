@@ -24,7 +24,7 @@ The version above is an example; it must match the version in `Info.plist`. GitH
 
 ## Package locally
 
-Requires the normal build tools plus Python 3 (available with Xcode's command-line tools).
+Requires the normal build tools plus Python 3.12 or later.
 
 ```sh
 brew install mpv pkgconf python
@@ -39,11 +39,13 @@ The package contains mpx's pinned patched libmpv and all linked Homebrew depende
 
 `dependencies/mpv/recipe.json` pins mpv 0.41.0, the installed Homebrew VapourSynth and hotplug backports, the Core Audio patch, Meson and Ninja versions, and build options. `scripts/libmpv_build.py` verifies the inputs and builds into a private generation under `build/libmpv/`. Development builds, tests and packaging select that prefix automatically. Builds require Python 3.12 or later. No installed Homebrew library is replaced.
 
+The builder uses the selected Xcode's Apple Clang, Swift and macOS SDK, plus Homebrew's pkg-config. Its cache records the selected tools, resolved dependency locations and pkg-config file hashes, so a Homebrew revision change creates a new generation even when the upstream version is unchanged. Custom compiler, flag, SDK and dependency-search overrides are rejected with an instruction to unset them; `DEVELOPER_DIR` remains supported for selecting Xcode. The builder constructs `PKG_CONFIG_PATH` from installed Homebrew kegs, replacing any inherited value. The receipt records this build environment, but does not lock every dependency or guarantee byte-identical builds.
+
 The corresponding-source archive's `mpv/` folder includes the original sources, all three patches, recipe, standalone builder and build receipt. Its README gives the rebuild command. The packager accepts only the verified private libmpv as an exception to its Homebrew dependency rule; other unknown libraries remain errors. Automatic audio selection and the AVFoundation workaround remain in app source. Channel routing, custom speaker assignments and physical device changes need hardware coverage beyond initialization tests.
 
 Exact installed Homebrew recipes identify the bundled dependency versions. The packager downloads their source archives, patches and build resources, verifies supplied SHA-256 hashes, and pins Git-based resources to commit IDs. Source archives are cached under `build/source-cache/`. The corresponding-source archive includes those downloads, recipes, Homebrew installation receipts, a manifest and licences. The app also includes licence/copyright notices.
 
-For known download failures, the packager has exact checksum-gated fallbacks: Debian mirrors uchardet 0.0.8, and `dependencies/source-fallbacks/` holds unmodified dav1d, libplacebo and x264 archives for the specific versions or commit listed there. It records the selected source in the manifest. Fallbacks cannot relax or replace the expected source checksum.
+For known download failures, the packager has exact checksum-gated fallbacks: Debian mirrors uchardet 0.0.8, and `dependencies/source-fallbacks/` holds unmodified dav1d, libplacebo and x264 archives for the specific versions or commit listed there. It records the selected source in the manifest. Cached archives whose retrieval origin was not recorded have `download_url: null`; their declared source URL and verified checksum remain available. Fallbacks cannot relax or replace the expected source checksum.
 
 The five release assets are:
 
@@ -66,8 +68,8 @@ export MPX_TEST_SCRATCH_PATH="$(mktemp -d "${TMPDIR:-/tmp}/mpx-tests.XXXXXX")"
 scripts/test.sh
 export MPX_LIBMPV_PREFIX="$(python3 scripts/libmpv_build.py)"
 python3 scripts/verify-package.py \
-  build/release/mpx-0.1.8-macos-arm64.zip "$MPX_TEST_SCRATCH_PATH"
+  build/release/mpx-0.1.9-macos-arm64.zip "$MPX_TEST_SCRATCH_PATH"
 (cd build/release && shasum -a 256 -c SHA256SUMS.txt)
 ```
 
-Replace the archive version with the release being checked. Verification extracts a temporary copy, checks all binary architectures, signatures and dependency paths, and runs both test bundles against the packaged libraries while sandbox rules deny reads from Homebrew and the selected private libmpv prefix. It leaves the user's Homebrew installation unchanged.
+Replace the archive version with the release being checked. Verification extracts a temporary copy, checks all binary architectures, signatures and dependency paths, and runs both test bundles against the packaged libraries while sandbox rules deny reads from Homebrew and the selected private libmpv prefix. `MPX_LIBMPV_PREFIX` is required when supplying a test directory. Both test bundles must pass dependency checks before either runs; only system libraries, bundled libraries and the selected Xcode's required test runtimes are allowed. Test subprocesses ignore inherited `DYLD_*` overrides. It leaves the user's Homebrew installation unchanged.

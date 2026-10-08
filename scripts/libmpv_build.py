@@ -19,6 +19,20 @@ import tarfile
 
 PROJECT = Path(__file__).resolve().parent.parent
 RECIPE = PROJECT / "dependencies/mpv"
+PKG_CONFIG = Path("/opt/homebrew/bin/pkg-config")
+DEPENDENCY_NAMES = ("libavcodec", "libavfilter", "libavformat", "libavutil", "libavdevice",
+                    "libswresample", "libswscale", "libplacebo", "libass", "mujs", "lcms2",
+                    "libarchive", "libbluray", "luajit", "rubberband", "uchardet",
+                    "vapoursynth", "zimg", "libjpeg", "vulkan")
+# This recipe supports the selected Xcode and Homebrew, not custom toolchains
+# or flags. Reject overrides rather than silently reusing an incompatible build.
+BUILD_OVERRIDES = ("CC", "CXX", "OBJC", "OBJCXX", "AR", "LD", "CC_LD", "CXX_LD",
+                   "OBJC_LD", "OBJCXX_LD", "SWIFTC", "SWIFTFLAGS",
+                   "CFLAGS", "CXXFLAGS", "CPPFLAGS", "OBJCFLAGS", "OBJCXXFLAGS", "LDFLAGS",
+                   "SDKROOT", "MACOSX_DEPLOYMENT_TARGET", "TOOLCHAINS", "ARCHFLAGS",
+                   "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+                   "LIBRARY_PATH", "CMAKE_PREFIX_PATH", "PKG_CONFIG", "PKG_CONFIG_LIBDIR",
+                   "PKG_CONFIG_SYSROOT_DIR")
 
 
 def sha256(path):
@@ -45,8 +59,45 @@ def verify_prefix(prefix, folder=RECIPE):
     return library.resolve(), receipt
 
 
-def pkgconfig_path():
-    return ":".join(str(p) for p in sorted(Path("/opt/homebrew/opt").glob("*/lib/pkgconfig")))
+def pkgconfig_path(opt=Path("/opt/homebrew/opt")):
+    # Resolve opt aliases to versioned kegs, preserving discovery order while
+    # removing aliases. Homebrew revision changes must invalidate the cache.
+    return ":".join(dict.fromkeys(str(p.resolve()) for p in sorted(opt.glob("*/lib/pkgconfig"))))
+
+
+def build_inputs(identity):
+    env = dict(os.environ)
+    overrides = [name for name in BUILD_OVERRIDES if env.get(name)]
+    if overrides:
+        raise RuntimeError("Unsupported libmpv build overrides; unset " + ", ".join(overrides))
+    # Do not discover compilers or pkg-config through the caller's PATH.
+    # DEVELOPER_DIR remains supported: xcrun resolves it to the recorded tools.
+    env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+    def output(*args):
+        return subprocess.check_output(args, env=env, text=True).strip()
+
+    compiler = Path(output("/usr/bin/xcrun", "--sdk", "macosx", "--find", "clang")).resolve(strict=True)
+    swift = Path(output("/usr/bin/xcrun", "--sdk", "macosx", "--find", "swiftc")).resolve(strict=True)
+    sdk = Path(output("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path")).resolve(strict=True)
+    pkgconfig = PKG_CONFIG.resolve(strict=True)
+    env.update(CC=str(compiler), OBJC=str(compiler),
+               CXX=str(compiler.with_name("clang++")), OBJCXX=str(compiler.with_name("clang++")),
+               SDKROOT=str(sdk), PKG_CONFIG=str(pkgconfig), PKG_CONFIG_PATH=pkgconfig_path())
+    env["PATH"] = str(compiler.parent) + ":" + env["PATH"]
+    inputs = {"recipe_sha256": identity,
+              "compiler": output(str(compiler), "--version"), "compiler_path": str(compiler),
+              "swift_compiler": output(str(swift), "--version"), "swift_compiler_path": str(swift),
+              "sdk": output("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"),
+              "sdk_path": str(sdk),
+              "pkg_config": {"path": str(pkgconfig), "version": output(str(pkgconfig), "--version")},
+              "dependencies": {}, "dependency_files": {},
+              "pkg_config_path": env["PKG_CONFIG_PATH"]}
+    for name in DEPENDENCY_NAMES:
+        inputs["dependencies"][name] = output(str(pkgconfig), "--modversion", name)
+        pc = Path(output(str(pkgconfig), "--path", name)).resolve(strict=True)
+        inputs["dependency_files"][name] = {"path": str(pc), "sha256": sha256(pc)}
+    return env, inputs
 
 
 def build(folder, root):
@@ -58,19 +109,7 @@ def build(folder, root):
     root.mkdir(parents=True, exist_ok=True)
     recipe = json.loads((folder / "recipe.json").read_text())
     identity = recipe_hash(folder)
-    env = dict(os.environ, PKG_CONFIG_PATH=pkgconfig_path())
-    # Include installed dependency versions and resolved search paths in the
-    # generation key, so changing Homebrew dependencies creates a fresh prefix.
-    dependency_names = ["libavcodec", "libavfilter", "libavformat", "libavutil", "libavdevice",
-                        "libswresample", "libswscale", "libplacebo", "libass", "mujs", "lcms2",
-                        "libarchive", "libbluray", "luajit", "rubberband", "uchardet",
-                        "vapoursynth", "zimg", "libjpeg", "vulkan"]
-    inputs = {"recipe_sha256": identity,
-              "compiler": subprocess.check_output(["xcrun", "clang", "--version"], text=True),
-              "sdk": subprocess.check_output(["xcrun", "--show-sdk-version"], text=True).strip(),
-              "dependencies": {name: subprocess.check_output(["pkg-config", "--modversion", name], env=env, text=True).strip()
-                               for name in dependency_names},
-              "pkg_config_path": env["PKG_CONFIG_PATH"]}
+    env, inputs = build_inputs(identity)
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()[:16]
     generation = root / key
     prefix = generation / "prefix"
