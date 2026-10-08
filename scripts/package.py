@@ -30,6 +30,11 @@ SOURCE_MIRRORS = {
         "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0",
         "https://deb.debian.org/debian/pool/main/u/uchardet/uchardet_0.0.8.orig.tar.xz"),
 }
+SOURCE_FALLBACKS = {
+    "https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2":
+        "2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011",
+}
+FALLBACK_DIRECTORY = Path(__file__).resolve().parent.parent / "dependencies/source-fallbacks"
 
 
 def run(*args, **kwargs):
@@ -129,6 +134,9 @@ def fetch_source(task):
         mirror = SOURCE_MIRRORS.get(url)
         if mirror and resource.get("sha256") == mirror[0]:
             candidates.append(mirror[1])
+        fallback = SOURCE_FALLBACKS.get(url)
+        if fallback and resource.get("sha256") == fallback:
+            candidates.append((FALLBACK_DIRECTORY / (fallback + ".tar.bz2")).as_uri())
         for candidate in candidates:
             try:
                 subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--connect-timeout", "20",
@@ -139,6 +147,9 @@ def fetch_source(task):
                 continue
             expected = resource.get("sha256")
             if expected and sha256(temporary) != expected:
+                if candidate != candidates[-1]:
+                    print(f"Rejected source checksum from {candidate}; trying verified fallback", flush=True)
+                    continue
                 raise RuntimeError(f"Source checksum mismatch: {candidate}")
             temporary.rename(cached)
             url_record.write_text(candidate)
@@ -149,7 +160,11 @@ def fetch_source(task):
         raise RuntimeError(f"Source checksum mismatch: {url}")
     shutil.copy2(cached, destination)
     # Git archives are pinned by immutable commit; record their archive checksum.
-    return {**resource, "download_url": url_record.read_text() if url_record.exists() else url,
+    downloaded = url_record.read_text() if url_record.exists() else url
+    if downloaded.startswith("file:"):
+        # Keep machine-specific checkout paths out of the portable manifest.
+        downloaded = "repository:dependencies/source-fallbacks/" + urllib.parse.urlparse(downloaded).path.rsplit("/", 1)[-1]
+    return {**resource, "download_url": downloaded,
             "archive": destination.name, "archive_sha256": checksum}
 
 

@@ -56,6 +56,24 @@ class LibmpvProvenanceTests(unittest.TestCase):
 
 
 class SourceMirrorTests(unittest.TestCase):
+    def test_invalid_primary_response_uses_exact_repository_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            data = b"original source"
+            checksum = hashlib.sha256(data).hexdigest()
+            snapshot = root / (checksum + ".tar.bz2")
+            snapshot.write_bytes(data)
+            primary = "https://primary/source.tar.bz2"
+            def download(args, **kwargs):
+                Path(args[-1]).write_bytes(data if snapshot.as_uri() in args else b"unexpected response")
+            with patch("package.SOURCE_FALLBACKS", {primary: checksum}), patch("package.FALLBACK_DIRECTORY", root), patch("package.subprocess.run", side_effect=download):
+                result = fetch_source(({"url": primary, "sha256": checksum}, root / "archive.tar.bz2", cache))
+                self.assertEqual(result["archive_sha256"], checksum)
+                self.assertTrue(result["download_url"].startswith("repository:"))
+                self.assertNotIn(directory, result["download_url"])
+
     def test_transport_failure_uses_identical_archive_and_records_mirror(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

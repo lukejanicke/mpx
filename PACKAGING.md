@@ -43,6 +43,8 @@ The corresponding-source archive's `mpv/` folder includes the original sources, 
 
 Exact installed Homebrew recipes identify the bundled dependency versions. The packager downloads their source archives, patches and build resources, verifies supplied SHA-256 hashes, and pins Git-based resources to commit IDs. Source archives are cached under `build/source-cache/`. The corresponding-source archive includes those downloads, recipes, Homebrew installation receipts, a manifest and licences. The app also includes licence/copyright notices.
 
+For two known download failures, the packager has exact checksum-gated fallbacks: Debian mirrors uchardet 0.0.8, and `dependencies/source-fallbacks/` holds the unmodified dav1d 1.5.4 archive. It records the selected source in the manifest. Fallbacks cannot relax or replace the expected source checksum.
+
 The five release assets are:
 
 - `mpx-VERSION-macos-arm64.zip`: the runnable app, without a Homebrew dependency.
