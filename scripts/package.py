@@ -33,6 +33,10 @@ SOURCE_MIRRORS = {
 SOURCE_FALLBACKS = {
     "https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2":
         "2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011",
+    "https://code.videolan.org/videolan/libplacebo/-/archive/v7.360.1/libplacebo-v7.360.1.tar.bz2":
+        "937aa5eeea596798b3274d362de2e3bd32bc537a66d149dd85043349c74dffb6",
+    "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.gz":
+        "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9",
 }
 FALLBACK_DIRECTORY = Path(__file__).resolve().parent.parent / "dependencies/source-fallbacks"
 
@@ -124,7 +128,8 @@ def sha256(path):
 
 def fetch_source(task):
     resource, destination, cache = task
-    url, _ = source_url(resource)
+    url, extension = source_url(resource)
+    expected = resource.get("sha256") or SOURCE_FALLBACKS.get(url)
     key = hashlib.sha256(url.encode()).hexdigest()
     cached = cache / key
     url_record = cache / (key + ".url")
@@ -132,11 +137,11 @@ def fetch_source(task):
         temporary = cache / (key + ".part")
         candidates = [url]
         mirror = SOURCE_MIRRORS.get(url)
-        if mirror and resource.get("sha256") == mirror[0]:
+        if mirror and expected == mirror[0]:
             candidates.append(mirror[1])
         fallback = SOURCE_FALLBACKS.get(url)
-        if fallback and resource.get("sha256") == fallback:
-            candidates.append((FALLBACK_DIRECTORY / (fallback + ".tar.bz2")).as_uri())
+        if fallback and expected == fallback:
+            candidates.append((FALLBACK_DIRECTORY / (fallback + extension)).as_uri())
         for candidate in candidates:
             try:
                 subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--connect-timeout", "20",
@@ -145,19 +150,21 @@ def fetch_source(task):
                 if candidate == candidates[-1]:
                     raise
                 continue
-            expected = resource.get("sha256")
             if expected and sha256(temporary) != expected:
                 if candidate != candidates[-1]:
                     print(f"Rejected source checksum from {candidate}; trying verified fallback", flush=True)
                     continue
                 raise RuntimeError(f"Source checksum mismatch: {candidate}")
+            if not expected and (extension.startswith(".tar.") or extension == ".tgz") and not tarfile.is_tarfile(temporary):
+                raise RuntimeError(f"Invalid source archive: {candidate}")
             temporary.rename(cached)
             url_record.write_text(candidate)
             break
     checksum = sha256(cached)
-    expected = resource.get("sha256")
     if expected and checksum != expected:
         raise RuntimeError(f"Source checksum mismatch: {url}")
+    if not expected and (extension.startswith(".tar.") or extension == ".tgz") and not tarfile.is_tarfile(cached):
+        raise RuntimeError(f"Invalid source archive: {url}")
     shutil.copy2(cached, destination)
     # Git archives are pinned by immutable commit; record their archive checksum.
     downloaded = url_record.read_text() if url_record.exists() else url
@@ -216,14 +223,22 @@ def collect_sources(formulae, root, notices, cache):
             destination = folder / (label + extension)
             tasks.append((resource, destination, cache))
             owners[str(destination)] = (manifest, notice_folder)
+    errors = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         futures = {executor.submit(fetch_source, task): task for task in tasks}
         for future in concurrent.futures.as_completed(futures):
             _, destination, _ = futures[future]
             manifest, notice_folder = owners[str(destination)]
-            manifest["sources"].append(future.result())
+            try:
+                result = future.result()
+            except Exception as error:
+                errors.append(f"{manifest['name']}/{destination.name}: {error}")
+                continue
+            manifest["sources"].append(result)
             archive_notices(destination, notice_folder)
             print(f"Collected source: {manifest['name']}/{destination.name}", flush=True)
+    if errors:
+        raise RuntimeError("Dependency source collection failed:\n" + "\n".join(errors))
     for manifest in manifests:
         manifest["sources"].sort(key=lambda r: r["archive"])
     return manifests

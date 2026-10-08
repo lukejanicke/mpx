@@ -56,6 +56,17 @@ class LibmpvProvenanceTests(unittest.TestCase):
 
 
 class SourceMirrorTests(unittest.TestCase):
+    def test_git_archive_cannot_be_an_html_response(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            def download(args, **kwargs):
+                Path(args[-1]).write_bytes(b"<html>unexpected response</html>")
+            with patch("package.subprocess.run", side_effect=download):
+                with self.assertRaisesRegex(RuntimeError, "Invalid source archive"):
+                    fetch_source(({"url": "https://github.com/example/source.git", "specs": {"revision": "a" * 40}}, root / "archive.tar.gz", cache))
+
     def test_invalid_primary_response_uses_exact_repository_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
