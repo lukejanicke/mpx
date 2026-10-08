@@ -19,6 +19,7 @@ import urllib.parse
 import zipfile
 
 from app_staging import temporary_app_directory
+from libmpv_build import RECIPE, verify_prefix
 
 
 SYSTEM_PREFIXES = ("/System/Library/", "/usr/lib/")
@@ -33,7 +34,7 @@ def dependencies(binary):
             for line in run("otool", "-L", str(binary)).splitlines()[1:]]
 
 
-def inventory(executable):
+def inventory(executable, libmpv=None):
     graph, pending = {}, [executable.resolve()]
     while pending:
         binary = pending.pop()
@@ -49,8 +50,8 @@ def inventory(executable):
             path = path.resolve()
             if path == binary:  # dylib's own install name
                 continue
-            if "/Cellar/" not in str(path):
-                raise RuntimeError(f"Expected a Homebrew dependency: {name}")
+            if "/Cellar/" not in str(path) and path != libmpv:
+                raise RuntimeError(f"Expected Homebrew or the verified libmpv dependency: {name}")
             linked[name] = path
             pending.append(path)
         graph[binary] = linked
@@ -189,6 +190,32 @@ def collect_sources(formulae, root, notices, cache):
     return manifests
 
 
+def collect_libmpv(prefix, root, notices):
+    library, receipt = verify_prefix(prefix)
+    recipe = json.loads((RECIPE / "recipe.json").read_text())
+    folder = root / "mpv"
+    folder.mkdir()
+    notice_folder = notices / "mpv"
+    notice_folder.mkdir()
+    for name in ("recipe.json", recipe["local_patch"]["archive"]):
+        shutil.copy2(RECIPE / name, folder / name)
+    shutil.copy2(Path(__file__).with_name("libmpv_build.py"), folder / "libmpv_build.py")
+    shutil.copy2(Path(prefix) / "build-receipt.json", folder / "build-receipt.json")
+    sources = []
+    for item in recipe["sources"]:
+        source = Path(prefix).parent.parent / "downloads" / item["archive"]
+        if sha256(source) != item["sha256"]:
+            raise RuntimeError(f"libmpv corresponding-source checksum mismatch: {source}")
+        target = folder / item["archive"]
+        shutil.copy2(source, target)
+        sources.append({**item, "archive_sha256": sha256(target)})
+        archive_notices(target, notice_folder)
+    sources.append({**recipe["local_patch"], "archive_sha256": sha256(folder / recipe["local_patch"]["archive"])})
+    return {"name": "mpv", "version": recipe["version"], "license": recipe["license"],
+            "homepage": recipe["homepage"], "build": receipt, "sources": sources,
+            "recipe": "recipe.json", "builder": "libmpv_build.py"}
+
+
 def main(app_path, output_path):
     app_path, output = Path(app_path).resolve(), Path(output_path).resolve()
     project = Path(__file__).resolve().parent.parent
@@ -202,8 +229,14 @@ def main(app_path, output_path):
     architecture = run("lipo", "-archs", str(executable))
     if architecture != "arm64":
         raise RuntimeError(f"This release recipe expects Apple silicon, got {architecture}")
-    graph, libraries = inventory(executable)
-    formulae = formula_metadata(libraries)
+    prefix = os.environ.get("MPX_LIBMPV_PREFIX")
+    if not prefix:
+        raise RuntimeError("Use scripts/package.sh to select the pinned libmpv")
+    libmpv, receipt = verify_prefix(prefix)
+    graph, libraries = inventory(executable, libmpv)
+    if libmpv not in libraries:
+        raise RuntimeError("The app does not link mpx's pinned libmpv; rebuild it")
+    formulae = formula_metadata([p for p in libraries if p != libmpv])
     name = f"mpx-{version}-macos-arm64"
     source_name = f"mpx-{version}-dependency-sources"
     with temporary_app_directory(prefix="mpx-package-") as staging:
@@ -219,6 +252,8 @@ def main(app_path, output_path):
         source_root = staging / source_name
         source_root.mkdir()
         source_manifest = collect_sources(formulae, source_root, notices, cache)
+        source_manifest.append(collect_libmpv(prefix, source_root, notices))
+        source_manifest.sort(key=lambda item: item["name"])
         (source_root / "manifest.json").write_text(json.dumps(source_manifest, indent=2) + "\n")
         shutil.copy2(project / "LICENSE", source_root / "LICENSE")
         homebrew_license = Path(run("brew", "--repository")) / "LICENSE.txt"
@@ -226,18 +261,22 @@ def main(app_path, output_path):
         shutil.copy2(homebrew_license, notices / "HOMEBREW-LICENSE.txt")
         (source_root / "README.md").write_text(
             "# mpx dependency sources\n\n"
-            "These sources, patches and installed Homebrew recipes correspond to the libraries bundled with this release. "
+            "These sources, patches and build recipes correspond to the libraries bundled with this release. "
             "Resources include source embedded into libraries at build time. Upstream licences remain in each archive; "
             "copies of notices are also inside mpx.app/Contents/Resources/Licenses.\n\n"
             "`manifest.json` records exact versions, source locations and checksums. Git resources are pinned to immutable commits. "
             "`INSTALL_RECEIPT.json` records Homebrew's build environment and dependency versions. "
-            "The `.rb` recipes specify build commands and patches. Rebuild using Homebrew and the included recipes, "
+            "The mpv folder contains the pinned upstream archive, both Homebrew backports, the mpx channel-layout patch, "
+            "recipe.json, libmpv_build.py and build-receipt.json. With Python 3.12 or later and the listed Homebrew "
+            "dependencies installed, run `python3 mpv/libmpv_build.py --recipe-dir mpv --build-root /tmp/mpx-libmpv-rebuild` "
+            "from this directory. It verifies and uses the included sources and never replaces Homebrew libraries. "
+            "Other `.rb` recipes specify build commands and patches. Rebuild those using Homebrew and the included recipes, "
             "staging each listed resource under the path named in its recipe. mpx's source and release scripts are in "
             "https://github.com/lukejanicke/mpx at the matching release tag. System libraries supplied by macOS are not bundled.\n")
         rows = ["# Third-party libraries", "", "mpx uses libmpv and FFmpeg. The distributed build uses GPLv3-or-later components.", "",
                 "Matching dependency source archives and build recipes accompany this release on GitHub.", "",
                 "| Library | Version | Licence metadata |", "| --- | --- | --- |"]
-        for formula in formulae:
+        for formula in source_manifest:
             rows.append(f"| {formula['name']} | {formula['version']} | {json.dumps(formula['license'])} |")
         rows += ["", "Complete upstream licence and copyright notices are in `Licenses/` and the source archives.", "",
                  "Apple's SF Symbols are system-provided assets governed by Apple's SDK licence, not mpx's GPL licence. "
@@ -287,7 +326,7 @@ def main(app_path, output_path):
         checksums = output / "SHA256SUMS.txt"
         checksums.write_text("".join(f"{sha256(path)}  {path.name}\n" for path in
                                      [app_archive, source_archive, output / "THIRD-PARTY.md", output / "dependency-sources.json"]))
-        print(f"Packaged {len(libraries)} libraries from {len(formulae)} projects", flush=True)
+        print(f"Packaged {len(libraries)} libraries from {len(source_manifest)} projects", flush=True)
         print(app_archive, flush=True)
         print(source_archive, flush=True)
 

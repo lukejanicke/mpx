@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify an extracted release and optionally test it without Homebrew access."""
 import os
+import json
 from pathlib import Path
 import plistlib
 import shutil
@@ -10,6 +11,7 @@ import sys
 from app_staging import temporary_app_directory
 
 from package import dependencies, SYSTEM_PREFIXES
+from libmpv_build import verify_prefix
 
 
 def verify(archive, test_directory=None):
@@ -40,6 +42,8 @@ def verify(archive, test_directory=None):
             raise RuntimeError("Missing dependency notices")
         print(f"Verified signatures and relocation for {len(binaries)} binaries", flush=True)
         if test_directory:
+            prefix = os.environ.get("MPX_LIBMPV_PREFIX")
+            libmpv = verify_prefix(prefix)[0] if prefix else None
             test_directory = Path(test_directory)
             xctest = subprocess.check_output(["xcrun", "--find", "xctest"], text=True).strip()
             for name in ("PlayerLogicTests", "PlaybackIntegrationTests"):
@@ -50,7 +54,7 @@ def verify(archive, test_directory=None):
                 shutil.copytree(candidates[0], bundle)
                 binary = bundle / "Contents/MacOS" / name
                 for linked in dependencies(binary):
-                    if "/Cellar/" in linked or "/opt/homebrew/" in linked:
+                    if "/Cellar/" in linked or "/opt/homebrew/" in linked or (libmpv and Path(linked).resolve() == libmpv):
                         original = Path(linked).resolve()
                         replacement = frameworks / original.name
                         if not replacement.is_file():
@@ -58,9 +62,13 @@ def verify(archive, test_directory=None):
                         subprocess.run(["install_name_tool", "-change", linked, str(replacement), str(binary)], check=True)
                 subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
                 profile = '(version 1) (allow default) (deny file-read* (subpath "/opt/homebrew"))'
+                if prefix:
+                    # Quote the exact selected prefix; packaged tests must not
+                    # accidentally fall back to the development library.
+                    profile += ' (deny file-read* (subpath ' + json.dumps(str(Path(prefix).resolve())) + '))'
                 subprocess.run(["/usr/bin/sandbox-exec", "-p", profile, xctest, str(bundle)],
                                env=os.environ, timeout=90, check=True)
-            print("All tests passed against bundled libraries with Homebrew reads denied", flush=True)
+            print("All tests passed against bundled libraries with Homebrew and private libmpv reads denied", flush=True)
 
 
 if __name__ == "__main__":

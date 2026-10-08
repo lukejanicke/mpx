@@ -19,12 +19,12 @@ Install Xcode 27 or later with its command-line tools, and [Homebrew](https://br
 ```sh
 git clone https://github.com/lukejanicke/mpx.git
 cd mpx
-brew install mpv pkgconf
+brew install mpv pkgconf python
 scripts/build.sh
 open build/mpx.app
 ```
 
-The development build uses your installed Homebrew libraries. The build script also creates `build/mpx.zip`; that small development ZIP requires Homebrew too. Use `scripts/package.sh` to create a self-contained release instead; see [PACKAGING.md](PACKAGING.md).
+The build script compiles the pinned patched libmpv into a private prefix under `build/libmpv`, using existing Homebrew dependencies. It does not replace Homebrew libraries. Python 3.12 or later is required; Meson and Ninja are installed in a private build environment. The first build takes longer; later builds reuse the verified library. The script also creates `build/mpx.zip`; that development ZIP requires its local build prefix and Homebrew dependencies. Use `scripts/package.sh` to create a self-contained release instead; see [PACKAGING.md](PACKAGING.md).
 
 Launch from the cloned source directory:
 
@@ -75,8 +75,9 @@ Zoom ranges from fit to 8× and anchors at the pointer. Panning stops at the ima
 
 ## Dependencies and local data
 
-- Xcode / Swift and Homebrew's `mpv` and `pkgconf` are needed to build. `brew install mpv pkgconf` installs them if absent.
-- Development builds use Homebrew libmpv and FFmpeg at runtime; rebuild after an incompatible library upgrade. Downloadable release apps include the linked libraries inside the app bundle.
+- Xcode / Swift, Python 3.12 or later, and Homebrew's `mpv` and `pkgconf` are needed to build. `brew install mpv pkgconf python` installs the dependencies if absent.
+- Development builds use mpx's pinned patched libmpv and Homebrew dependencies at runtime. The build scripts select the private library automatically. Downloadable release apps include the linked libraries inside the app bundle.
+- The libmpv patch corrects Core Audio initialization on macOS 27. Audio-output selection remains automatic; AVFoundation retains its per-player volume/mute workaround if selected.
 - The renderer uses libmpv's OpenGL render API. OpenGL is deprecated by Apple but remains available on the target Mac. This version targets SDR output; native HDR/extended-dynamic-range output has not been implemented.
 - Playback history is local JSON at `~/Library/Application Support/mpx/playback-history.json`. It is saved every five seconds, on file replacement, close, and quit. Replacing a file at the same path resets its stored position. History is limited to 1,000 entries.
 - macOS manages Open Recent separately. Audio volume is saved in the app's local preferences.
@@ -100,7 +101,7 @@ MPX_TEST_VIDEO_PATH="$PWD/build/fixtures/h264.mp4" \
 MPX_TEST_FIXTURE_DIRECTORY="$PWD/build/fixtures" scripts/test.sh
 ```
 
-Tests cover time input, scan acceleration, pointer-centred zoom, pan limits, return to fit, resume-file identity, completed-file handling, decoding, resume autoplay, exact paused seeking, playback error reporting, scan state restoration, saved-history reloading, and rendering after paused window resizing. The window tests verify the centred 16:9 empty-window default, matching content proportions on portrait/ultrawide file replacement, native resize ratio configuration, and rendered content without added margins at constrained sizes. Volume tests cover every icon boundary and clicking the speaker to mute/unmute without changing the volume setting. Scrubbing tests cover input clamping, hover-thumb proximity, stable drag position, exact release seeking, pause/mute restoration, and saving the selected position. Overlay tests verify independent centring, alignment and non-overlapping groups in wide and narrow windows, preserved button sizes, and hover-time mapping without seeking. The codec fixtures are H.264/MP4, HEVC/MKV, VP9/WebM, AV1/MKV, MPEG-4/AVI, and FFV1/MKV. All 22 tests passed on macOS 27.0.1 / Apple silicon on 7 October 2026.
+Tests cover time input, scan acceleration, pointer-centred zoom, pan limits, return to fit, resume-file identity, completed-file handling, decoding, resume autoplay, exact paused seeking, playback error reporting, scan state restoration, saved-history reloading, and rendering after paused window resizing. The window tests verify the centred 16:9 empty-window default, matching content proportions on portrait/ultrawide file replacement, native resize ratio configuration, and rendered content without added margins at constrained sizes. Volume tests cover every icon boundary and clicking the speaker to mute/unmute without changing the volume setting. Scrubbing tests cover input clamping, hover-thumb proximity, stable drag position, exact release seeking, pause/mute restoration, and saving the selected position. Overlay tests verify independent centring, alignment and non-overlapping groups in wide and narrow windows, preserved button sizes, and hover-time mapping without seeking. The codec fixtures are H.264/MP4, HEVC/MKV, VP9/WebM, AV1/MKV, MPEG-4/AVI, and FFV1/MKV. All 22 app tests passed on macOS 27.0.1 / Apple silicon on 8 October 2026 with Core Audio selected. Four packaging tests also check rejection of altered provenance and unknown private libraries.
 
 GitHub's hosted runner cannot always create accelerated OpenGL. CI may explicitly skip the nine display-dependent tests in that environment; the complete suite and playback inspection must pass locally on a supported physical Mac before approving a release.
 

@@ -3,5 +3,6 @@ set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 export PATH="/opt/homebrew/bin:$PATH"
+. "$project_dir/scripts/libmpv-env.sh"
 scripts/build.sh
 python3 scripts/package.py build/mpx.app build/release

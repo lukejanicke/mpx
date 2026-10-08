@@ -7,6 +7,7 @@ if ! pkg-config --exists mpv; then
     echo 'mpx needs libmpv. Install it with: brew install mpv' >&2
     exit 1
 fi
+. "$project_dir/scripts/libmpv-env.sh"
 swift build -c release
 bin_dir=$(swift build -c release --show-bin-path)
 stage_parent=$(mktemp -d "${TMPDIR:-/tmp}/mpx-build.XXXXXX")

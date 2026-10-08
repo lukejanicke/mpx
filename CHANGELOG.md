@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.8] - 2026-10-08
+
+- Fix Core Audio initialization on macOS 27 by correcting libmpv's audio channel-layout property and initializing its layout data.
+- Build and bundle a pinned patched libmpv, with matching sources, patches and a reproducible build recipe.
+- Retain automatic audio-output selection and the AVFoundation volume/mute workaround for fallback.
+
 ## [0.1.7] - 2026-10-07
 
 - Refine overlay spacing, scrub-line alignment, and equal padding around time text.

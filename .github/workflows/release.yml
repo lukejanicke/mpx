@@ -46,7 +46,12 @@ jobs:
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
-        run: brew install mpv pkgconf
+        run: brew install mpv pkgconf python
+
+      - name: Build pinned libmpv
+        run: |
+          prefix=$(python3 scripts/libmpv_build.py)
+          echo "MPX_LIBMPV_PREFIX=$prefix" >> "$GITHUB_ENV"
 
       - name: Run tests
         env:
@@ -58,7 +63,7 @@ jobs:
       - name: Package app and corresponding dependency sources
         run: scripts/package.sh
 
-      - name: Verify the packaged app without Homebrew access
+      - name: Verify the packaged app without development library access
         env:
           MPX_TEST_SCRATCH_PATH: ${{ runner.temp }}/mpx-tests
         run: |

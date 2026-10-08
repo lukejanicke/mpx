@@ -27,7 +27,7 @@ The version above is an example; it must match the version in `Info.plist`. GitH
 Requires the normal build tools plus Python 3 (available with Xcode's command-line tools).
 
 ```sh
-brew install mpv pkgconf
+brew install mpv pkgconf python
 scripts/package.sh
 ```
 
@@ -35,7 +35,11 @@ The script first makes the ordinary development build, then packages a separate 
 
 Temporary app bundles live in `.noindex` staging folders and are unregistered from Launch Services before cleanup. Failed or interrupted builds restore the previous development app if replacement has not completed. When a previous build is still running, its temporary copy is removed after it exits. Packaging and verification also clean up on normal termination signals. Forced termination such as `kill -9` or a power loss cannot run cleanup.
 
-The package contains all linked Homebrew libraries. Its dependency paths are rewritten to resolve inside `mpx.app/Contents/Frameworks`. Each library and the outer app are ad-hoc signed, and the signature is verified before archiving. No Developer ID certificate or notarisation is configured.
+The package contains mpx's pinned patched libmpv and all linked Homebrew dependencies. Its dependency paths are rewritten to resolve inside `mpx.app/Contents/Frameworks`. Each library and the outer app are ad-hoc signed, and the signature is verified before archiving. No Developer ID certificate or notarisation is configured.
+
+`dependencies/mpv/recipe.json` pins mpv 0.41.0, the installed Homebrew VapourSynth and hotplug backports, the Core Audio patch, Meson and Ninja versions, and build options. `scripts/libmpv_build.py` verifies the inputs and builds into a private generation under `build/libmpv/`. Development builds, tests and packaging select that prefix automatically. Builds require Python 3.12 or later. No installed Homebrew library is replaced.
+
+The corresponding-source archive's `mpv/` folder includes the original sources, all three patches, recipe, standalone builder and build receipt. Its README gives the rebuild command. The packager accepts only the verified private libmpv as an exception to its Homebrew dependency rule; other unknown libraries remain errors. Automatic audio selection and the AVFoundation workaround remain in app source. Channel routing, custom speaker assignments and physical device changes need hardware coverage beyond initialization tests.
 
 Exact installed Homebrew recipes identify the bundled dependency versions. The packager downloads their source archives, patches and build resources, verifies supplied SHA-256 hashes, and pins Git-based resources to commit IDs. Source archives are cached under `build/source-cache/`. The corresponding-source archive includes those downloads, recipes, Homebrew installation receipts, a manifest and licences. The app also includes licence/copyright notices.
 
@@ -55,11 +59,13 @@ The downloaded app needs Apple silicon and macOS 27 or later. The full original 
 scripts/make-fixtures.sh
 export MPX_TEST_VIDEO_PATH="$PWD/build/fixtures/h264.mp4"
 export MPX_TEST_FIXTURE_DIRECTORY="$PWD/build/fixtures"
+export MPX_EXPECT_AUDIO_OUTPUT=coreaudio
 export MPX_TEST_SCRATCH_PATH="$(mktemp -d "${TMPDIR:-/tmp}/mpx-tests.XXXXXX")"
 scripts/test.sh
+export MPX_LIBMPV_PREFIX="$(python3 scripts/libmpv_build.py)"
 python3 scripts/verify-package.py \
-  build/release/mpx-0.1.5-macos-arm64.zip "$MPX_TEST_SCRATCH_PATH"
+  build/release/mpx-0.1.8-macos-arm64.zip "$MPX_TEST_SCRATCH_PATH"
 (cd build/release && shasum -a 256 -c SHA256SUMS.txt)
 ```
 
-Replace the archive version with the release being checked. Verification extracts a temporary copy, checks all binary architectures, signatures and dependency paths, and runs both test bundles against the packaged libraries while sandbox rules deny Homebrew reads. It leaves the user's Homebrew installation unchanged.
+Replace the archive version with the release being checked. Verification extracts a temporary copy, checks all binary architectures, signatures and dependency paths, and runs both test bundles against the packaged libraries while sandbox rules deny reads from Homebrew and the selected private libmpv prefix. It leaves the user's Homebrew installation unchanged.

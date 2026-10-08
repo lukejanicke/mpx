@@ -414,6 +414,9 @@ final class PlaybackIntegrationTests: XCTestCase {
             output.fulfill()
         }
         wait(for: [output], timeout: 5)
+        if let expectedOutput = ProcessInfo.processInfo.environment["MPX_EXPECT_AUDIO_OUTPUT"] {
+            XCTAssertEqual(audioOutput, expectedOutput)
+        }
         if audioOutput == "avfoundation" {
             let renderer = expectation(description: "AVFoundation renderer receives volume and mute")
             renderer.expectedFulfillmentCount = 2
