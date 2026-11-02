@@ -289,17 +289,13 @@ final class VideoClickTests: XCTestCase {
                                     isARepeat: false, keyCode: 49)!
         // Two newer inputs leave a state different from the original pre-click value.
         // A stale restoration on the second click would therefore be observable.
-        window.sendEvent(space)
-        window.sendEvent(space)
-        XCTAssertTrue(player.snapshot.paused)
-        assertCorePause(true, in: player)
+        expectPause(false, in: player) { window.sendEvent(space) }
+        expectPause(true, in: player) { window.sendEvent(space) }
         expectUnchanged(player) { click(player, count: 2) }
 
         expectPause(false, in: player) { click(player) }
-        controls.play.performClick(nil)
-        controls.play.performClick(nil)
-        XCTAssertFalse(player.snapshot.paused)
-        assertCorePause(false, in: player)
+        expectPause(true, in: player) { controls.play.performClick(nil) }
+        expectPause(false, in: player) { controls.play.performClick(nil) }
         expectUnchanged(player) { click(player, count: 2) }
     }
 
@@ -312,15 +308,13 @@ final class VideoClickTests: XCTestCase {
             click(player, count: 2)
         }
         expectPause(false, in: player) { click(player) }
-        player.progress.beginInteraction(at: player.progress.thumbCenter)
-        player.progress.endInteraction()
-        // Scrubbing briefly pauses playback; wait for its restoration before observing cancellation.
-        let restored = expectation(description: "Scrubbing restores the playing state")
-        player.engine.inspectProperty("pause") { value in
-            XCTAssertEqual(value as? Bool, false)
-            restored.fulfill()
+        // A core property read does not acknowledge delivery of its snapshot.
+        // Observe both transitions before testing that the next click leaves
+        // playback unchanged, rather than capturing a queued scrub-pause state.
+        expectPause(true, in: player) {
+            player.progress.beginInteraction(at: player.progress.thumbCenter)
         }
-        wait(for: [restored], timeout: 5)
+        expectPause(false, in: player) { player.progress.endInteraction() }
         expectUnchanged(player) { click(player, count: 2) }
     }
 
