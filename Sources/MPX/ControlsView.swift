@@ -216,6 +216,10 @@ final class ControlsView: NSView {
 final class PlayerSurface: NSView {
     weak var player: PlayerWindowController?
     private var tracking: NSTrackingArea?
+    private var clickStart: NSPoint?
+    private var clickPanelFrame: NSRect?
+    private var clickCount = 0
+    private var playbackBeforeClick: Bool?
     override var acceptsFirstResponder: Bool { true }
 
     override init(frame frameRect: NSRect) {
@@ -235,16 +239,65 @@ final class PlayerSurface: NSView {
     override func mouseMoved(with event: NSEvent) { player?.showControls() }
     override func mouseEntered(with event: NSEvent) { player?.showControls() }
     override func mouseExited(with event: NSEvent) { player?.pointerLeft() }
+    func isVideoClick(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        return !event.modifierFlags.contains(.control) && bounds.contains(point)
+            && player?.visibleControlsPanelFrame?.contains(point) != true
+    }
     override func mouseDown(with event: NSEvent) {
+        let eligible = isVideoClick(event)
+        if event.clickCount != 2 || !eligible { cancelPlaybackClick() }
+        let point = convert(event.locationInWindow, from: nil)
+        // Revealing the controls must not invalidate a press on uncovered video.
+        let panel = player?.visibleControlsPanelFrame
         window?.makeFirstResponder(self)
         player?.showControls()
-        if event.clickCount == 2 { player?.toggleFullscreen() }
+        guard eligible, (1...2).contains(event.clickCount) else { return }
+        clickStart = point
+        clickPanelFrame = panel
+        clickCount = event.clickCount
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = clickStart else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        if !bounds.contains(point) || hypot(point.x - start.x, point.y - start.y) >= 4 {
+            cancelPlaybackClick()
+        }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let start = clickStart else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let count = clickCount
+        let panel = clickPanelFrame
+        let originalPause = playbackBeforeClick
+        cancelPlaybackClick()
+        guard bounds.contains(point), panel?.contains(point) != true,
+              hypot(point.x - start.x, point.y - start.y) < 4 else { return }
+        if count == 2 {
+            if let originalPause { player?.restorePlayback(paused: originalPause) }
+            player?.toggleFullscreen()
+        } else {
+            // Act immediately; a second click restores this state explicitly.
+            playbackBeforeClick = player?.togglePlayback()
+        }
+    }
+    func cancelPlaybackClick() {
+        playbackBeforeClick = nil
+        clickStart = nil
+        clickPanelFrame = nil
+        clickCount = 0
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        cancelPlaybackClick()
+        super.viewWillMove(toWindow: newWindow)
     }
     override func magnify(with event: NSEvent) {
+        cancelPlaybackClick()
         let position = convert(event.locationInWindow, from: nil)
         player?.zoom(by: max(0.01, 1 + event.magnification), anchor: CGPoint(x: position.x, y: bounds.height - position.y))
     }
     override func scrollWheel(with event: NSEvent) {
+        cancelPlaybackClick()
         player?.pan(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
     }
     override func layout() { super.layout(); player?.viewportChanged(bounds.size) }
@@ -264,6 +317,13 @@ final class PlayerSurface: NSView {
 
 final class PlayerWindow: NSWindow {
     override func sendEvent(_ event: NSEvent) {
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown].contains(event.type),
+           let player = windowController as? PlayerWindowController {
+            // Preserve the first click's state only for a second click on video.
+            if event.type != .leftMouseDown || event.clickCount != 2 || !player.surface.isVideoClick(event) {
+                player.surface.cancelPlaybackClick()
+            }
+        }
         if (event.type == .keyDown || event.type == .keyUp), !(firstResponder is NSTextView),
            let player = windowController as? PlayerWindowController, player.handleKey(event) { return }
         super.sendEvent(event)

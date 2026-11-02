@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Toggle play/pause immediately on releasing a single left-click on the video. Double-clicking restores the prior play/pause state and toggles fullscreen, while control-panel interactions remain unchanged.
+
 ## [0.1.9] - 2026-10-08
 
 - Retain the Core Audio initialization fix and automatic audio-output fallback from the 0.1.8 candidate.

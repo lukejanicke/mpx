@@ -14,6 +14,8 @@ The release is ad-hoc signed, **not Developer ID signed or notarised**. macOS ma
 
 ## Clone and build
 
+For agent-assisted updates, follow [AGENTS.md](AGENTS.md) and the [local update workflow](PACKAGING.md#local-update-workflow): test one temporary self-contained candidate, then install that same app and clean its temporary artifacts after user acceptance. The designated candidate is `build/development.noindex/mpx.app`. Script integration is pending; the low-level commands below still produce and launch the legacy development build.
+
 Install Xcode 27 or later with its command-line tools, and [Homebrew](https://brew.sh/). Complete Xcode’s initial setup before building. Then:
 
 ```sh
@@ -49,7 +51,7 @@ The five playback buttons stay centred beneath the progress line. The time hover
 
 | Action | Input |
 | --- | --- |
-| Play / pause | Space |
+| Play / pause | Single left-click video or Space |
 | Back / forward 10 seconds | Tap Left / Right |
 | Seek / scrub | Click the progress line / drag its position thumb |
 | Muted scan backward / forward | Hold Left / Right |
@@ -64,6 +66,8 @@ The five playback buttons stay centred beneath the progress line. The time hover
 | Go to a timestamp | Click elapsed time or Shift–Command–G |
 | Open file / new window | Command–O / Command–N |
 | Close window / quit app | Command–W / Command–Q |
+
+A single left-click on the video toggles playback immediately on release. Double-clicking toggles fullscreen and restores the play/pause state from before the first click; playback briefly pauses or resumes between clicks. The controls appear immediately. The visible controls panel, including its padding, is excluded from video click actions. Dragging does not toggle playback.
 
 A rounded progress line sits above the buttons. Its hit area extends equally past the visible stroke on all four sides, with 8-point padding to the panel’s left, right, and top edges. The played section is opaque white; the unplayed section is white at 20% opacity (80% transparency). An opaque white thumb appears when the pointer approaches the current position and remains visible during dragging. A small timestamp above the pointer previews the seek time on hover and follows dragging, staying inside the window at either endpoint. Clicking the line seeks. Dragging previews frames while paused, then restores the previous play/pause state on release, preserving mute. The elapsed-time display follows the dragged position. The line fades with the other controls and stays visible while hovered or dragged.
 
@@ -96,15 +100,24 @@ SF Symbols are Apple-provided assets under Apple’s SDK licence, not the GPL. T
 ## Verification
 
 ```sh
+(
+set -eu
 scripts/make-fixtures.sh
+MPX_TEST_SCRATCH_PATH=$(mktemp -d "${TMPDIR:-/tmp}/mpx-tests.XXXXXX")
+export MPX_TEST_SCRATCH_PATH
+trap 'rm -rf -- "$MPX_TEST_SCRATCH_PATH"' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 MPX_TEST_VIDEO_PATH="$PWD/build/fixtures/h264.mp4" \
 MPX_TEST_FIXTURE_DIRECTORY="$PWD/build/fixtures" scripts/test.sh
+)
 ```
 
-Tests cover time input, scan acceleration, pointer-centred zoom, pan limits, return to fit, resume-file identity, completed-file handling, decoding, resume autoplay, exact paused seeking, playback error reporting, scan state restoration, saved-history reloading, and rendering after paused window resizing. The window tests verify the centred 16:9 empty-window default, matching content proportions on portrait/ultrawide file replacement, native resize ratio configuration, and rendered content without added margins at constrained sizes. Volume tests cover every icon boundary and clicking the speaker to mute/unmute without changing the volume setting. Scrubbing tests cover input clamping, hover-thumb proximity, stable drag position, exact release seeking, pause/mute restoration, and saving the selected position. Overlay tests verify independent centring, alignment and non-overlapping groups in wide and narrow windows, preserved button sizes, and hover-time mapping without seeking. The codec fixtures are H.264/MP4, HEVC/MKV, VP9/WebM, AV1/MKV, MPEG-4/AVI, and FFV1/MKV. Packaging tests cover provenance rejection, build-cache invalidation, packaged-test isolation, unknown private libraries, interrupted source-cache metadata and checksum-preserving source fallbacks.
+Tests cover time input, scan acceleration, pointer-centred zoom, pan limits, return to fit, resume-file identity, completed-file handling, decoding, resume autoplay, exact paused seeking, playback error reporting, scan state restoration, saved-history reloading, and rendering after paused window resizing. The window tests verify the centred 16:9 empty-window default, matching content proportions on portrait/ultrawide file replacement, native resize ratio configuration, and rendered content without added margins at constrained sizes. Video-click tests cover immediate single-click playback, double-click fullscreen with play/pause state restoration, overlay exclusions, and click cancellation. Volume tests cover every icon boundary and clicking the speaker to mute/unmute without changing the volume setting. Scrubbing tests cover input clamping, hover-thumb proximity, stable drag position, exact release seeking, pause/mute restoration, and saving the selected position. Overlay tests verify independent centring, alignment and non-overlapping groups in wide and narrow windows, preserved button sizes, and hover-time mapping without seeking. The codec fixtures are H.264/MP4, HEVC/MKV, VP9/WebM, AV1/MKV, MPEG-4/AVI, and FFV1/MKV. Packaging tests cover provenance rejection, build-cache invalidation, packaged-test isolation, unknown private libraries, interrupted source-cache metadata and checksum-preserving source fallbacks.
 
-GitHub's hosted runner cannot always create accelerated OpenGL. CI may explicitly skip the nine display-dependent tests in that environment; the complete suite and playback inspection must pass locally on a supported physical Mac before approving a release.
+GitHub's hosted runner cannot always create accelerated OpenGL. CI may explicitly skip the display-dependent tests in that environment; the complete suite and playback inspection must pass locally on a supported physical Mac before approving a release.
 
-`scripts/test.sh` stages XCTest builds in a temporary directory to avoid Finder metadata breaking test-bundle signatures inside Documents. Zoom and pan geometry are tested automatically.
+`scripts/test.sh` stages XCTest builds outside Documents to avoid Finder metadata breaking test-bundle signatures. The script currently leaves its scratch directory behind; the subshell above creates and cleans its own scratch directory on normal exit, failure or catchable termination. Agent-managed updates must also record the scratch path for recovery after forced interruption. Use the [packaged verification example](PACKAGING.md#verify-locally) when the test build must survive for bundled-library verification. Zoom and pan geometry are tested automatically.
 
 See [PACKAGING.md](PACKAGING.md) for release packaging and verification.

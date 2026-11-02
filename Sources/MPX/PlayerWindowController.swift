@@ -27,6 +27,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     private let controlsBackdrop = ControlsBackdrop(frame: .zero)
     let progress = ProgressView(frame: .zero)
     var controlsPanelFrame: NSRect { controlsBackdrop.frame }
+    var visibleControlsPanelFrame: NSRect? { controlsBackdrop.isHidden ? nil : controlsBackdrop.frame }
     private var scrubPosition: Double?
     private var beforeScrubPaused = true
     private var scrubLastSeek = 0.0
@@ -142,6 +143,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func open(_ url: URL) {
+        surface.cancelPlaybackClick()
         guard url.isFileURL, let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true else {
             presentError("Choose a local video file.")
             return
@@ -192,13 +194,28 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    func togglePlayback() {
-        guard fileURL != nil else { return }
+    @discardableResult
+    func togglePlayback() -> Bool? {
+        surface.cancelPlaybackClick()
+        guard fileURL != nil, !stopped else { return nil }
         progress.endInteraction()
         finishScan(cancelTap: true)
+        let previouslyPaused = snapshot.paused
         if snapshot.eof { engine.seek(0); snapshot.eof = false; snapshot.paused = true }
         snapshot.paused.toggle()
         engine.set("pause", snapshot.paused ? "yes" : "no")
+        updateOverlay()
+        showControls()
+        return previouslyPaused
+    }
+
+    func restorePlayback(paused: Bool) {
+        surface.cancelPlaybackClick()
+        guard fileURL != nil, !stopped else { return }
+        // A newer engine snapshot may still describe the first click. Restore
+        // the saved state rather than toggling that asynchronous snapshot.
+        snapshot.paused = paused
+        engine.set("pause", paused ? "yes" : "no")
         updateOverlay()
         showControls()
     }
@@ -218,6 +235,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func beginScrub() {
+        surface.cancelPlaybackClick()
         guard fileURL != nil, snapshot.duration > 0 else { return }
         finishScan(cancelTap: true)
         beforeScrubPaused = snapshot.paused
@@ -304,7 +322,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         if UserDefaults.standard.object(forKey: "volume") != nil { snapshot.volume = UserDefaults.standard.double(forKey: "volume") }
     }
 
-    func toggleFullscreen() { showControls(); window?.toggleFullScreen(nil) }
+    func toggleFullscreen() { surface.cancelPlaybackClick(); showControls(); window?.toggleFullScreen(nil) }
     func resetZoom() { zoomState.reset(); applyTransform(); showFeedback("Fit"); showControls() }
     func zoomFromCenter(by factor: Double) {
         zoom(by: factor, anchor: CGPoint(x: surface.bounds.midX, y: surface.bounds.midY))
@@ -544,6 +562,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
     }
     func shutdown() {
         guard !stopped else { return }
+        surface.cancelPlaybackClick()
         progress.endInteraction()
         finishScan(cancelTap: true)
         savePosition()
@@ -555,8 +574,13 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         engine.shutdown()
     }
     func windowWillClose(_ notification: Notification) { shutdown(); onClose?(self) }
-    func windowDidResignKey(_ notification: Notification) { progress.endInteraction(); finishScan(cancelTap: true) }
+    func windowDidResignKey(_ notification: Notification) {
+        surface.cancelPlaybackClick()
+        progress.endInteraction()
+        finishScan(cancelTap: true)
+    }
     func windowWillEnterFullScreen(_ notification: Notification) {
+        surface.cancelPlaybackClick()
         fullscreenTransition = true
         window?.contentResizeIncrements = NSSize(width: 1, height: 1)
     }
@@ -566,7 +590,10 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         layoutControls()
         showControls()
     }
-    func windowWillExitFullScreen(_ notification: Notification) { fullscreenTransition = true }
+    func windowWillExitFullScreen(_ notification: Notification) {
+        surface.cancelPlaybackClick()
+        fullscreenTransition = true
+    }
     func windowDidExitFullScreen(_ notification: Notification) {
         fullscreenTransition = false
         fitWindow(to: fittedVideoSize ?? NSSize(width: 16, height: 9))
